@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@theme {
+  --color-asfalto: #1d2630;
+  --color-concreto: #eef0ee;
+  --color-faixa: #f2c230;
+  --color-livre: #2f8f5b;
+  --color-ocupado: #c8473d;
+  --font-sans: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+}
+body { background: var(--color-concreto); color: var(--color-asfalto); }
+:focus-visible { outline: 3px solid var(--color-faixa); outline-offset: 2px; }
