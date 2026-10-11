@@ -88,5 +88,12 @@ Isso valida o driver do Neon de verdade (consultas, constraints, triggers, conco
 - Cookies são **assinados, não criptografados**: o do vizinho guarda IDs de reservas dele (sem dados pessoais).
 - Limite por IP: vizinhos no mesmo Wi-Fi dividem a cota de 8 reservas/hora.
 - Edições simultâneas do mesmo registro por duas abas do admin: vale a última (há um único administrador).
-- Pagamentos, PIX, e-mail e WhatsApp não existem (fora do escopo do MVP).
-# aluguel_de_garagem
+- Não há cobrança automática: o PIX é só exibido ao vizinho e você confirma o recebimento no painel. E-mail e WhatsApp não existem.
+
+
+## PIX
+
+Painel → Configurações → "PIX para pagamento": informe a chave (e, opcionalmente, nome do recebedor e cidade).
+O vizinho vê a chave com botão "Copiar" na tela de sucesso da reserva e em "Minhas reservas". Com nome e cidade
+preenchidos, também recebe o PIX "copia e cola" já com o valor. A chave é pública por natureza (feita para quem vai pagar).
+Alterações ficam no histórico de configurações.

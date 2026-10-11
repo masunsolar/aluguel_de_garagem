@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import MyReservations from "./MyReservations";
+import PixBox from "./PixBox";
+import type { PixConfig } from "@/lib/pix";
 import { calculatePrice, brl, toDate, DEFAULT_PRICING, type PricingConfig } from "@/lib/pricing";
 import { brtDay } from "@/lib/time";
 
@@ -13,6 +15,7 @@ export default function Booking() {
   const today = iso(new Date());
   const [busy, setBusy] = useState<Busy[] | null>(null);
   const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
+  const [pix, setPix] = useState<PixConfig | null>(null);
   const [advance, setAdvance] = useState(14); // maximumReservationAdvanceDays (vem do servidor)
   const [loadErr, setLoadErr] = useState(false);
   const [day, setDay] = useState(today);
@@ -23,7 +26,7 @@ export default function Booking() {
   const load = () => fetch("/api/availability").then((r) => (r.ok ? r.json() : Promise.reject())).then((b) => { setBusy(b); setLoadErr(false); }).catch(() => setLoadErr(true));
   useEffect(() => {
     load();
-    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(c.pricing); setAdvance(c.maximumReservationAdvanceDays); }).catch(() => {});
+    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(c.pricing); setAdvance(c.maximumReservationAdvanceDays); setPix(c.pix ?? null); }).catch(() => {});
   }, []);
 
   const days = useMemo(() => Array.from({ length: advance + 1 }, (_, i) => iso(new Date(Date.now() + i * 86400000))), [advance]);
@@ -40,6 +43,7 @@ export default function Booking() {
         <div>Identificador: <b>{done.id}</b></div>
         <div className="mt-2 rounded-lg bg-concreto p-3 text-sm">Código para acompanhar em outro aparelho: <b className="select-all">{done.code}</b><br />Guarde-o: ele não será mostrado de novo.</div>
       </dl>
+      <PixBox pix={pix} totalCents={done.totalCents} />
       <button className="mt-5 rounded-lg bg-asfalto px-4 py-2.5 text-white" onClick={() => { setDone(null); setOpen(false); setVer((v) => v + 1); load(); }}>Voltar</button>
     </div>
   );

@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { brl } from "@/lib/pricing";
+import PixBox from "./PixBox";
+import type { PixConfig } from "@/lib/pix";
 
 const LABEL: Record<string, string> = { pendente: "Pendente", confirmada: "Confirmada", em_andamento: "Em andamento", finalizada: "Finalizada", cancelada: "Cancelada", em_analise: "Em análise" };
 const fmt = (s: string) => new Date(s).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" });
@@ -8,8 +10,9 @@ const fmt = (s: string) => new Date(s).toLocaleString("pt-BR", { timeZone: "Amer
 export default function MyReservations() {
   const [list, setList] = useState<any[] | null>(null);
   const [code, setCode] = useState(""); const [err, setErr] = useState("");
+  const [pix, setPix] = useState<PixConfig | null>(null);
   const load = () => fetch("/api/minhas-reservas").then((r) => r.json()).then(setList);
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); fetch("/api/config").then((r) => r.json()).then((c) => setPix(c.pix ?? null)).catch(() => {}); }, []);
   async function link(e: React.FormEvent) {
     e.preventDefault(); setErr("");
     const r = await fetch("/api/minhas-reservas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
@@ -26,9 +29,12 @@ export default function MyReservations() {
       {list?.length === 0 && <p className="mt-2 text-asfalto/60">Você ainda não tem reservas neste aparelho.</p>}
       <ul className="mt-2 space-y-2">
         {list?.map((r) => (
-          <li key={r.shortId} className="flex items-center justify-between rounded-xl bg-white p-3">
+          <li key={r.shortId} className="rounded-xl bg-white p-3">
+           <div className="flex items-center justify-between">
             <div><div>{fmt(r.start)} → {fmt(r.end)}</div><div className="text-sm text-asfalto/60">#{r.shortId} • {LABEL[r.status] ?? r.status}</div></div>
             <div className="text-right"><b>{brl(r.totalCents)}</b>{["pendente", "confirmada"].includes(r.status) && new Date(r.start) > new Date() && <button onClick={() => cancel(r.id)} className="block text-sm text-ocupado underline">Cancelar</button>}</div>
+           </div>
+           {["pendente", "confirmada"].includes(r.status) && new Date(r.end) > new Date() && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Pagar via PIX</summary><PixBox pix={pix} totalCents={r.totalCents} /></details>}
           </li>
         ))}
       </ul>

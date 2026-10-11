@@ -222,6 +222,23 @@ await test("MUDAR PREÇO: vale só p/ novas reservas, antigas não mudam, mudan�
 await test("voltar a antecedência para 14 passa a valer na hora (dia+20 → 400)", async () => {
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14 }) })).status, 200);
   eq((await book(D(20), "08:00", D(20), "09:00")).status, 400); eq((await call("GET", "/api/config")).json.maximumReservationAdvanceDays, 14); });
+await test("PIX: admin salva a chave (auditado); vizinho vê na config pública; só admin altera; chave inválida → 400; vazio desliga", async () => {
+  const pix = { key: "natan@example.com", name: "Natan Silva", city: "Sao Paulo" };
+  eq((await call("PUT", "/api/admin/settings", { body: cfg({ pix }) })).status, 401);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ pix: { ...pix, key: "<script>" } }) })).status, 400);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ pix }) })).status, 200);
+  eq((await call("GET", "/api/config")).json.pix.key, "natan@example.com");
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.pix.name, "Natan Silva");
+  assert.ok((await db.query("select 1 from reservation_events where action='configuracao_alterada' and details->>'chave'='pix'")).rowCount >= 1);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.pix.key, "natan@example.com"); // sem pix no corpo = não mexe
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ pix: { key: "", name: "", city: "" } }) })).status, 200); eq((await call("GET", "/api/config")).json.pix.key, ""); });
+await test("PIX copia e cola: CRC16 e campos corretos (vetor padrão CRC-16/CCITT-FALSE)", async () => {
+  let m; try { m = await import("../lib/pix.ts"); } catch { console.log("      (Node sem suporte a importar .ts: teste do CRC ignorado)"); return; }
+  const { crc16, pixPayload } = m;
+  eq(crc16("123456789"), "29B1");
+  const c = pixPayload({ key: "natan@example.com", name: "Natan Álvares", city: "São Paulo" }, 3000);
+  assert.match(c, /^000201.*br\.gov\.bcb\.pix0117natan@example\.com.*5303986540530\.00.*5802BR5913NATAN ALVARES6009SAO PAULO.*6304[0-9A-F]{4}$/);
+  eq(crc16(c.slice(0, -4)), c.slice(-4)); eq(pixPayload({ key: "x", name: "", city: "" }, 3000), null); });
 await test("LOGOUT revoga na hora: token copiado antes do logout deixa de funcionar (API e página)", async () => {
   const J = {}; await login(J); const copy = { adm: J.adm }; eq((await call("GET", "/api/admin/reservations", { jar: copy })).status, 200);
   eq((await call("DELETE", "/api/admin/login", { jar: J })).status, 200); eq(Object.keys(J).length, 0);

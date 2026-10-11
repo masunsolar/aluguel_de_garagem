@@ -29,5 +29,10 @@ export const pricingSchema = z.object({
   dayPrice: z.number().min(0).max(10000), nightPrice: z.number().min(0).max(10000),
   dayStartHour: z.number().int().min(0).max(23), nightStartHour: z.number().int().min(0).max(23),
 });
-export const settingsSchema = z.object({ pricing: pricingSchema, garageName: z.string().trim().min(1).max(60), maximumReservationAdvanceDays: z.number().int().min(1).max(60) });
+export const pixSchema = z.object({
+  key: z.string().trim().max(77).regex(/^[A-Za-z0-9@.+\-_]*$/, "Chave PIX inválida."),
+  name: z.string().trim().max(25),
+  city: z.string().trim().max(15),
+});
+export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pricingSchema, garageName: z.string().trim().min(1).max(60), maximumReservationAdvanceDays: z.number().int().min(1).max(60) });
 export const isUuid = (v: string) => z.string().uuid().safeParse(v).success;
