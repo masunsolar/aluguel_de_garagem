@@ -50,12 +50,14 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
 const toMine = (r: any) => ({
   id: r.id as string, shortId: String(r.id).slice(0, 8).toUpperCase(), start: iso(r.start_at), end: iso(r.end_at), totalCents: r.total_cents,
   breakdown: (json(r.price_breakdown) as PriceBreakdown | null) ?? null, // só períodos e valores; nada pessoal
+  paymentStatus: r.payment_status as "pendente" | "pago", receiptCount: Number(r.receipt_count ?? 0),
   status: r.status === "irregular" ? "em_analise" : effectiveStatus(r), // o vizinho não vê a marcação interna; em andamento/finalizada são derivados do horário
 });
 export async function listMine(ids: string[]) {
   ids = ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i));
   if (!ids.length) return [];
-  const rows = await sql`select id, start_at, end_at, status, total_cents, price_breakdown from reservations
+  const rows = await sql`select id, start_at, end_at, status, total_cents, price_breakdown, payment_status,
+    (select count(*)::int from payment_receipts c where c.reservation_id = reservations.id) as receipt_count from reservations
     where id::text = any(string_to_array(${ids.join(",")}, ',')) and deleted_at is null and status <> 'bloqueada' order by start_at desc`;
   return rows.map(toMine);
 }
@@ -71,4 +73,16 @@ export async function cancelMine(id: string) {
     insert into reservation_events (reservation_id, actor, action, details)
     select id, 'vizinho', 'status_alterado', '{"to":"cancelada"}'::jsonb from u returning reservation_id`;
   return r.length > 0;
+}
+
+/** Comprovante enviado pelo dono (a rota já confirmou que o id está na sessão dele). Não muda o pagamento: o admin confere e marca. */
+export async function addReceiptMine(id: string, bytes: Buffer, mime: string) {
+  const [ok] = await sql`select (select count(*) from payment_receipts where reservation_id = ${id}) as n, payment_status
+    from reservations where id = ${id} and deleted_at is null and status not in ('cancelada','bloqueada')`;
+  if (!ok) throw new UserError("Reserva não encontrada.");
+  if (ok.payment_status === "pago") throw new UserError("Esta reserva já está marcada como paga.");
+  if (Number(ok.n) >= RULES.maxReceipts) throw new UserError(`Limite de ${RULES.maxReceipts} comprovantes por reserva.`);
+  await sql`with c as (insert into payment_receipts (reservation_id, mime, data) values (${id}, ${mime}, decode(${bytes.toString("base64")}, 'base64')) returning id)
+    insert into reservation_events (reservation_id, actor, action, details)
+    select ${id}::uuid, 'vizinho', 'comprovante_enviado', jsonb_build_object('receiptId', c.id) from c`;
 }

@@ -12,10 +12,11 @@ const FIELDS = {
   startAt: ["start_at", "entrada"], endAt: ["end_at", "saída"], status: ["status", "status"], name: ["name", "responsável"],
   apartment: ["apartment", "apartamento"], carBrand: ["car_brand", "marca"], carModel: ["car_model", "modelo"],
   carColor: ["car_color", "cor"], plate: ["plate", "placa"], notes: ["notes", "observações"], totalCents: ["total_cents", "valor"],
+  paymentStatus: ["payment_status", "pagamento"],
 } as const;
 type Key = keyof typeof FIELDS;
 // Normaliza datas para ISO e remove o hash do código de acompanhamento
-const strip = ({ access_hash, ...r }: any) => ({ ...r, price_breakdown: json(r.price_breakdown) ?? null, start_at: iso(r.start_at), end_at: iso(r.end_at), created_at: iso(r.created_at), updated_at: iso(r.updated_at), deleted_at: iso(r.deleted_at) });
+const strip = ({ access_hash, ...r }: any) => ({ ...r, price_breakdown: json(r.price_breakdown) ?? null, paid_at: iso(r.paid_at), start_at: iso(r.start_at), end_at: iso(r.end_at), created_at: iso(r.created_at), updated_at: iso(r.updated_at), deleted_at: iso(r.deleted_at) });
 
 // Todo evento é gravado no MESMO comando SQL da mudança (CTE): não há como mudar sem deixar histórico.
 async function clash(e: any, start: Date, end: Date, selfId: string | null): Promise<never> {
@@ -30,7 +31,8 @@ async function clash(e: any, start: Date, end: Date, selfId: string | null): Pro
 }
 
 export async function listAll() {
-  const rows = await sql`select r.*, (select count(*)::int from reservation_photos p where p.reservation_id = r.id) as photo_count
+  const rows = await sql`select r.*, (select count(*)::int from reservation_photos p where p.reservation_id = r.id) as photo_count,
+    (select count(*)::int from payment_receipts c where c.reservation_id = r.id) as receipt_count
     from reservations r where r.deleted_at is null order by r.start_at desc`;
   return rows.map(strip);
 }
@@ -40,7 +42,9 @@ export async function getDetail(id: string) {
   if (!r) return null;
   const events = await sql`select actor, action, details, created_at from reservation_events where reservation_id = ${id} order by created_at, id`;
   const photos = await sql`select id from reservation_photos where reservation_id = ${id} order by created_at`;
-  return { ...strip(r), events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string) };
+  const receipts = await sql`select id, mime, created_at from payment_receipts where reservation_id = ${id} order by created_at`;
+  return { ...strip(r), events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
+    receipts: receipts.map((c) => ({ id: c.id as string, mime: c.mime as string, created_at: iso(c.created_at) })) };
 }
 
 export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
@@ -51,11 +55,12 @@ export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
   const total = i.totalCents ?? calc?.totalCents ?? 0;
   const breakdown = calc ? JSON.stringify(calc.breakdown) : null;
   const action = i.status === "bloqueada" ? "bloqueio_criado" : "criada_manualmente";
-  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), motivo_ou_obs: i.notes ?? null });
+  const pay = i.paymentStatus ?? "pendente"; // toda reserva entra como pagamento pendente, salvo se o admin já marcar como pago
+  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), pagamento: pay, motivo_ou_obs: i.notes ?? null });
   try {
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, status, source, name, apartment, car_brand, car_model, car_color, plate, notes)
-        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${breakdown}::jsonb, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
+      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes)
+        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${breakdown}::jsonb, ${pay}, ${pay === "pago" ? new Date().toISOString() : null}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
                 ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
@@ -89,6 +94,8 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
     } else { next.price_breakdown = null; preco = "mantido"; } // valor mantido com outro horário: o detalhamento antigo não vale mais
   }
 
+  // Data do pagamento: registrada quando passa a "pago"; some se voltar a "pendente"
+  next.paid_at = next.payment_status === "pago" ? (cur.payment_status === "pago" ? cur.paid_at : new Date()) : null;
   const statusChanged = next.status !== cur.status;
   if (!statusChanged && !Object.keys(changes).length) return true;
   const action = statusChanged ? "status_alterado" : "editada";
@@ -98,7 +105,8 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
     const r = await sql`
       with u as (update reservations set start_at = ${s.toISOString()}, end_at = ${e.toISOString()}, status = ${next.status},
         total_cents = ${next.total_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
-        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, updated_at = now()
+        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes},
+        payment_status = ${next.payment_status}, paid_at = ${next.paid_at ? new Date(next.paid_at).toISOString() : null}, updated_at = now()
         where id = ${id} and deleted_at is null returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from u
       returning reservation_id`;
@@ -136,4 +144,9 @@ export async function getPhoto(id: string) {
 export async function quote(startAt: string, endAt: string) {
   const q = calculatePrice(new Date(startAt), new Date(endAt), await getPricing());
   return { totalCents: q.totalCents, days: q.days, nights: q.nights, breakdown: q.breakdown };
+}
+
+export async function getReceipt(id: string) {
+  const [c] = await sql`select mime, encode(data, 'base64') as b64 from payment_receipts where id = ${id}`;
+  return c ? { mime: c.mime as string, bytes: Buffer.from(c.b64, "base64") } : null;
 }

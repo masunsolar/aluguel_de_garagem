@@ -63,6 +63,21 @@ create table if not exists reservation_photos (
 -- GO
 create index if not exists photos_by_reservation on reservation_photos (reservation_id);
 -- GO
+-- Pagamento é separado do status da reserva: toda reserva entra como pagamento pendente; o admin marca como pago.
+alter table reservations add column if not exists payment_status text not null default 'pendente' check (payment_status in ('pendente','pago'));
+-- GO
+alter table reservations add column if not exists paid_at timestamptz;
+-- GO
+create table if not exists payment_receipts (
+  id uuid primary key default gen_random_uuid(),
+  reservation_id uuid not null references reservations(id),
+  mime text not null check (mime in ('image/jpeg','image/png','application/pdf')),
+  data bytea not null check (octet_length(data) <= 2000000),
+  created_at timestamptz not null default now()
+);
+-- GO
+create index if not exists receipts_by_reservation on payment_receipts (reservation_id);
+-- GO
 create table if not exists settings (key text primary key, value jsonb not null);
 -- GO
 insert into settings (key, value) values

@@ -101,7 +101,7 @@ await test("rate limit de reservas: 9ª tentativa do mesmo IP em 1h → 429", as
 await test("minhas reservas: dono vê só as suas, sem dados pessoais; outros não veem nada", async () => {
   resA2 = (await book(D(42), "10:00", D(42), "12:00", { jar: A })).json; eq(resA2.totalCents, 3000);
   const a = await call("GET", "/api/minhas-reservas", { jar: A }); eq(a.json.length, 2);
-  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "id", "shortId", "start", "status", "totalCents"]);
+  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "id", "paymentStatus", "receiptCount", "shortId", "start", "status", "totalCents"]);
   for (const s of ["João", "ABC1D23", "Argo"]) assert.ok(!a.text.includes(s));
   eq((await call("GET", "/api/minhas-reservas", { jar: B })).json.length, 0); eq((await call("GET", "/api/minhas-reservas")).json.length, 0); });
 await test("código de acompanhamento vincula a outro aparelho; errado → 404; 11 tentativas → 429", async () => {
@@ -238,6 +238,41 @@ await test("CHECK-OUT configurável: 11:00 amplia; fora do intervalo dia→noite
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pr("06:00") })).status, 200);
   eq((await book(D(53), "20:00", D(54), "10:00")).json.totalCents, 4500); // sem tolerância
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.pricing.checkoutTime, "10:30"); });
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 2)]);
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF");
+const receipt = (id, buf, jar, name = "c.jpg") => { const f = new FormData(); f.append("file", new Blob([buf]), name); return call("POST", `/api/minhas-reservas/${id}/comprovante`, { form: f, jar }); };
+let payId;
+await test("PAGAMENTO: toda reserva entra como pendente (vizinho e manual)", async () => {
+  const r = await book(D(45), "10:00", D(45), "12:00", { jar: A }); eq(r.status, 201);
+  payId = (await db.query("select id from reservations where start_at=$1", [Z(D(45), "10:00")])).rows[0].id;
+  eq((await dbRow(payId)).payment_status, "pendente"); eq((await dbRow(payId)).paid_at, null);
+  const mine = (await call("GET", "/api/minhas-reservas", { jar: A })).json.find((x) => x.id === payId); eq(mine.paymentStatus, "pendente"); eq(mine.receiptCount, 0);
+  const m = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(D(46), "10:00"), endAt: iso(D(46), "12:00"), name: "Manual" } });
+  eq(m.status, 201); eq((await dbRow(m.json.id)).payment_status, "pendente"); });
+await test("COMPROVANTE: só o dono envia; JPEG/PNG/PDF pelo conteúdo; lixo → 400; limite de 3", async () => {
+  eq((await receipt(payId, JPEG(), B)).status, 404); eq((await receipt(payId, JPEG(), null)).status, 404); eq((await receipt(crypto.randomUUID(), JPEG(), A)).status, 404);
+  eq((await receipt(payId, Buffer.from("<html><script>alert(1)</script>"), A, "x.pdf")).status, 400);
+  eq((await receipt(payId, JPEG(3_000_000), A)).status, 400);
+  eq((await receipt(payId, JPEG(), A)).status, 201); eq((await receipt(payId, PNG, A, "c.png")).status, 201); eq((await receipt(payId, PDF, A, "c.pdf")).status, 201);
+  eq((await receipt(payId, JPEG(), A)).status, 400); // 4º
+  eq((await call("GET", "/api/minhas-reservas", { jar: A })).json.find((x) => x.id === payId).receiptCount, 3);
+  eq((await dbRow(payId)).payment_status, "pendente"); // enviar comprovante NÃO marca como pago
+  const d = await detail(payId); assert.deepEqual(d.receipts.map((c) => c.mime), ["image/jpeg", "image/png", "application/pdf"]); assert.ok(d.events.some((e) => e.action === "comprovante_enviado")); });
+await test("COMPROVANTE: só admin vê; servido sem cache e em sandbox", async () => {
+  const [c] = (await detail(payId)).receipts.filter((x) => x.mime === "application/pdf"); const url = `/api/admin/receipts/${c.id}`;
+  const g = await call("GET", url, { jar: ADM }); eq(g.status, 200); eq(g.headers.get("content-type"), "application/pdf");
+  assert.match(g.headers.get("cache-control"), /no-store/); assert.match(g.headers.get("content-security-policy"), /sandbox/);
+  eq((await call("GET", url)).status, 401); eq((await call("GET", url, { jar: A })).status, 401); eq((await call("GET", `/api/admin/receipts/${crypto.randomUUID()}`, { jar: ADM })).status, 404); });
+await test("PAGAMENTO: admin marca pago (data registrada e auditada); vizinho vê; volta a pendente; valor inválido → 400", async () => {
+  eq((await call("PATCH", `/api/admin/reservations/${payId}`, { jar: ADM, body: { paymentStatus: "pago" } })).status, 200);
+  const x = await detail(payId); eq(x.payment_status, "pago"); assert.ok(x.paid_at); eq(x.status, "confirmada");
+  const ev = x.events.filter((e) => e.action === "editada").at(-1); eq(ev.details.changes["pagamento"].from, "pendente"); eq(ev.details.changes["pagamento"].to, "pago");
+  eq((await call("GET", "/api/minhas-reservas", { jar: A })).json.find((y) => y.id === payId).paymentStatus, "pago");
+  const before = x.paid_at; eq((await call("PATCH", `/api/admin/reservations/${payId}`, { jar: ADM, body: { notes: "pago no PIX" } })).status, 200); eq((await detail(payId)).paid_at, before); // editar outra coisa não muda a data
+  eq((await call("PATCH", `/api/admin/reservations/${payId}`, { jar: ADM, body: { paymentStatus: "quitado" } })).status, 400);
+  eq((await call("PATCH", `/api/admin/reservations/${payId}`, { jar: ADM, body: { paymentStatus: "pendente" } })).status, 200); eq((await detail(payId)).paid_at, null); });
+await test("FOTO do veículo aceita PNG da galeria? Não: o painel converte para JPEG antes; o servidor continua só aceitando JPEG", async () => {
+  eq((await upload(payId, PNG, ADM, "x.png")).status, 400); eq((await upload(payId, JPEG(), ADM)).status, 201); });
 await test("voltar a antecedência para 14 passa a valer na hora (dia+20 → 400)", async () => {
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14 }) })).status, 200);
   eq((await book(D(20), "08:00", D(20), "09:00")).status, 400); eq((await call("GET", "/api/config")).json.maximumReservationAdvanceDays, 14); });
