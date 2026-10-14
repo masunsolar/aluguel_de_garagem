@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useState } from "react";
 import MyReservations from "./MyReservations";
 import PixBox from "./PixBox";
+import PriceBreakdown from "./PriceBreakdown";
 import type { PixConfig } from "@/lib/pix";
-import { calculatePrice, brl, toDate, DEFAULT_PRICING, type PricingConfig } from "@/lib/pricing";
+import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 import { brtDay } from "@/lib/time";
 
 type Busy = { start: string; end: string };
@@ -21,12 +22,12 @@ export default function Booking() {
   const [day, setDay] = useState(today);
   const [open, setOpen] = useState(false);
   const [ver, setVer] = useState(0);
-  const [done, setDone] = useState<{ id: string; code: string; start: string; end: string; totalCents: number } | null>(null);
+  const [done, setDone] = useState<{ id: string; code: string; start: string; end: string; totalCents: number; breakdown: Breakdown | null } | null>(null);
 
   const load = () => fetch("/api/availability").then((r) => (r.ok ? r.json() : Promise.reject())).then((b) => { setBusy(b); setLoadErr(false); }).catch(() => setLoadErr(true));
   useEffect(() => {
     load();
-    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(c.pricing); setAdvance(c.maximumReservationAdvanceDays); setPix(c.pix ?? null); }).catch(() => {});
+    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(withDefaults(c.pricing)); setAdvance(c.maximumReservationAdvanceDays); setPix(c.pix ?? null); }).catch(() => {});
   }, []);
 
   const days = useMemo(() => Array.from({ length: advance + 1 }, (_, i) => iso(new Date(Date.now() + i * 86400000))), [advance]);
@@ -40,6 +41,7 @@ export default function Booking() {
         <div>Entrada: {new Date(done.start).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}</div>
         <div>Saída: {new Date(done.end).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}</div>
         <div>Valor: <b>{brl(done.totalCents)}</b></div>
+        <PriceBreakdown breakdown={done.breakdown} className="mt-2 rounded-lg bg-concreto p-3" />
         <div>Identificador: <b>{done.id}</b></div>
         <div className="mt-2 rounded-lg bg-concreto p-3 text-sm">Código para acompanhar em outro aparelho: <b className="select-all">{done.code}</b><br />Guarde-o: ele não será mostrado de novo.</div>
       </dl>
@@ -77,7 +79,8 @@ export default function Booking() {
         )}
       </section>
 
-      <button onClick={() => setOpen(true)} className="mt-5 w-full rounded-xl bg-faixa px-4 py-3.5 text-lg font-semibold text-asfalto shadow-sm">+ Fazer reserva</button>
+      <p className="mt-4 text-sm text-asfalto/70">🕥 Check-out até <b>{pricing.checkoutTime}</b>: quem pernoita e sai até esse horário não paga a manhã.</p>
+      <button onClick={() => setOpen(true)} className="mt-3 w-full rounded-xl bg-faixa px-4 py-3.5 text-lg font-semibold text-asfalto shadow-sm">+ Fazer reserva</button>
       {open && <Form day={day} pricing={pricing} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
       <MyReservations key={ver} />
     </>
@@ -124,10 +127,11 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
         <div className="rounded-xl bg-concreto p-4">
           {quote ? <>
             <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
-            <div className="text-sm text-asfalto/70">{quote.days} dia(s) + {quote.nights} noite(s)</div>
             <div className="text-2xl font-bold">{brl(quote.totalCents)}</div>
+            <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
           </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
         </div>
+        <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>
         {err && <p role="alert" className="rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
         <div className="sticky bottom-0 -mx-5 -mb-5 flex gap-3 border-t border-asfalto/10 bg-white px-5 py-3">
           <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-asfalto/20 px-4 py-3">Cancelar</button>

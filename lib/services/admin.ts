@@ -15,7 +15,7 @@ const FIELDS = {
 } as const;
 type Key = keyof typeof FIELDS;
 // Normaliza datas para ISO e remove o hash do código de acompanhamento
-const strip = ({ access_hash, ...r }: any) => ({ ...r, start_at: iso(r.start_at), end_at: iso(r.end_at), created_at: iso(r.created_at), updated_at: iso(r.updated_at), deleted_at: iso(r.deleted_at) });
+const strip = ({ access_hash, ...r }: any) => ({ ...r, price_breakdown: json(r.price_breakdown) ?? null, start_at: iso(r.start_at), end_at: iso(r.end_at), created_at: iso(r.created_at), updated_at: iso(r.updated_at), deleted_at: iso(r.deleted_at) });
 
 // Todo evento é gravado no MESMO comando SQL da mudança (CTE): não há como mudar sem deixar histórico.
 async function clash(e: any, start: Date, end: Date, selfId: string | null): Promise<never> {
@@ -46,13 +46,16 @@ export async function getDetail(id: string) {
 export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
   const start = new Date(i.startAt), end = new Date(i.endAt);
   if (end <= start) throw new UserError("A saída precisa ser depois da entrada.");
-  const total = i.totalCents ?? (i.status === "bloqueada" ? 0 : calculatePrice(start, end, await getPricing()).totalCents);
+  // Detalhamento só quando o valor sai do cálculo; valor digitado à mão ou bloqueio não têm períodos
+  const calc = i.totalCents == null && i.status !== "bloqueada" ? calculatePrice(start, end, await getPricing()) : null;
+  const total = i.totalCents ?? calc?.totalCents ?? 0;
+  const breakdown = calc ? JSON.stringify(calc.breakdown) : null;
   const action = i.status === "bloqueada" ? "bloqueio_criado" : "criada_manualmente";
   const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), motivo_ou_obs: i.notes ?? null });
   try {
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, status, source, name, apartment, car_brand, car_model, car_color, plate, notes)
-        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
+      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, status, source, name, apartment, car_brand, car_model, car_color, plate, notes)
+        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${breakdown}::jsonb, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
                 ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
@@ -80,8 +83,10 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   let preco: "manual" | "recalculado" | "mantido" | undefined;
   if ("valor" in changes) preco = "manual";
   else if (timesChanged && next.status !== "bloqueada") {
-    if (patch.priceMode === "recalc") { apply("total_cents", "valor", calculatePrice(new Date(next.start_at), new Date(next.end_at), await getPricing()).totalCents); preco = "recalculado"; }
-    else preco = "mantido";
+    if (patch.priceMode === "recalc") {
+      const q = calculatePrice(new Date(next.start_at), new Date(next.end_at), await getPricing());
+      apply("total_cents", "valor", q.totalCents); next.price_breakdown = q.breakdown; preco = "recalculado";
+    } else { next.price_breakdown = null; preco = "mantido"; } // valor mantido com outro horário: o detalhamento antigo não vale mais
   }
 
   const statusChanged = next.status !== cur.status;
@@ -92,7 +97,7 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   try {
     const r = await sql`
       with u as (update reservations set start_at = ${s.toISOString()}, end_at = ${e.toISOString()}, status = ${next.status},
-        total_cents = ${next.total_cents}, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
+        total_cents = ${next.total_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
         car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, updated_at = now()
         where id = ${id} and deleted_at is null returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from u
@@ -130,5 +135,5 @@ export async function getPhoto(id: string) {
 /** Quanto custaria um horário com os preços ATUAIS (só consulta; não altera nada). */
 export async function quote(startAt: string, endAt: string) {
   const q = calculatePrice(new Date(startAt), new Date(endAt), await getPricing());
-  return { totalCents: q.totalCents, days: q.days, nights: q.nights };
+  return { totalCents: q.totalCents, days: q.days, nights: q.nights, breakdown: q.breakdown };
 }

@@ -1,13 +1,13 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { iso, sql } from "../db";
+import { iso, json, sql } from "../db";
 import { RULES } from "../rules";
 import { effectiveStatus } from "../status";
 import { brtDay } from "../time";
 import { hashCode } from "../auth";
 import { ConflictError, UserError } from "../errors";
-import { calculatePrice, toDate } from "../pricing";
+import { calculatePrice, toDate, type PriceBreakdown } from "../pricing";
 import { getAdvanceDays, getPricing } from "../settings";
 import { reservationSchema } from "../validation";
 
@@ -29,18 +29,18 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
   if (brtDay(start) > brtDay(new Date(now + advance * DAY))) throw new UserError(`Só é possível reservar com até ${advance} dias de antecedência.`);
   if (+end - +start < RULES.minMinutes * 60_000) throw new UserError(`A reserva mínima é de ${RULES.minMinutes} minutos.`);
   if (+end - +start > RULES.maxDurationDays * DAY) throw new UserError(`A reserva máxima é de ${RULES.maxDurationDays} dias.`);
-  const { totalCents } = calculatePrice(start, end, await getPricing()); // preço SEMPRE calculado aqui; o do navegador é só prévia
+  const { totalCents, breakdown } = calculatePrice(start, end, await getPricing()); // preço SEMPRE calculado aqui; o do navegador é só prévia
   const code = randomBytes(9).toString("base64url"); // código secreto de acompanhamento (72 bits; só o hash é guardado)
   const details = JSON.stringify({ entrada: start.toISOString(), saida: end.toISOString(), totalCents });
   try {
     // reserva + evento de auditoria no MESMO comando: não existe reserva sem histórico
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, status, source, name, apartment, car_brand, car_model, car_color, plate, access_hash)
-        values (${start.toISOString()}, ${end.toISOString()}, ${totalCents}, 'confirmada', 'vizinho', ${i.name}, ${i.apartment},
+      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, status, source, name, apartment, car_brand, car_model, car_color, plate, access_hash)
+        values (${start.toISOString()}, ${end.toISOString()}, ${totalCents}, ${JSON.stringify(breakdown)}::jsonb, 'confirmada', 'vizinho', ${i.name}, ${i.apartment},
                 ${i.carBrand}, ${i.carModel}, ${i.carColor}, ${i.plate}, ${hashCode(code)}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'vizinho', 'criada', ${details}::jsonb from r
       returning reservation_id as id`;
-    return { id: r[0].id as string, shortId: String(r[0].id).slice(0, 8).toUpperCase(), code, start, end, totalCents };
+    return { id: r[0].id as string, shortId: String(r[0].id).slice(0, 8).toUpperCase(), code, start, end, totalCents, breakdown };
   } catch (e: any) {
     if (e?.code === "23P01") throw new ConflictError("Esse horário já está ocupado. Escolha outro.");
     throw e;
@@ -49,12 +49,13 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
 
 const toMine = (r: any) => ({
   id: r.id as string, shortId: String(r.id).slice(0, 8).toUpperCase(), start: iso(r.start_at), end: iso(r.end_at), totalCents: r.total_cents,
+  breakdown: (json(r.price_breakdown) as PriceBreakdown | null) ?? null, // só períodos e valores; nada pessoal
   status: r.status === "irregular" ? "em_analise" : effectiveStatus(r), // o vizinho não vê a marcação interna; em andamento/finalizada são derivados do horário
 });
 export async function listMine(ids: string[]) {
   ids = ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i));
   if (!ids.length) return [];
-  const rows = await sql`select id, start_at, end_at, status, total_cents from reservations
+  const rows = await sql`select id, start_at, end_at, status, total_cents, price_breakdown from reservations
     where id::text = any(string_to_array(${ids.join(",")}, ',')) and deleted_at is null and status <> 'bloqueada' order by start_at desc`;
   return rows.map(toMine);
 }

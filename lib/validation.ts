@@ -28,7 +28,9 @@ export const quoteSchema = z.object({ startAt: dt, endAt: dt });
 export const pricingSchema = z.object({
   dayPrice: z.number().min(0).max(10000), nightPrice: z.number().min(0).max(10000),
   dayStartHour: z.number().int().min(0).max(23), nightStartHour: z.number().int().min(0).max(23),
-});
+  checkoutTime: time.default("10:30"), // horário-limite de saída sem cobrar a manhã (igual ao dia começar = sem tolerância)
+}).refine((p) => { const [h, m] = p.checkoutTime.split(":").map(Number); return h * 60 + m >= p.dayStartHour * 60 && h * 60 + m < p.nightStartHour * 60; },
+  { message: "O check-out precisa ficar entre o início do dia e o início da noite." });
 export const pixSchema = z.object({
   key: z.string().trim().max(77).regex(/^[A-Za-z0-9@.+\-_]*$/, "Chave PIX inválida."),
   name: z.string().trim().max(25),

@@ -26,6 +26,9 @@ create table if not exists reservations (
     where (deleted_at is null and status in ('pendente','confirmada','em_andamento','bloqueada','irregular'))
 );
 -- GO
+-- Detalhamento de como o valor foi calculado (períodos dia/noite, tolerância de check-out). Nulo em reservas antigas.
+alter table reservations add column if not exists price_breakdown jsonb;
+-- GO
 create index if not exists reservations_by_start on reservations (start_at) where deleted_at is null;
 -- GO
 create table if not exists reservation_events (
@@ -63,7 +66,7 @@ create index if not exists photos_by_reservation on reservation_photos (reservat
 create table if not exists settings (key text primary key, value jsonb not null);
 -- GO
 insert into settings (key, value) values
-  ('pricing', '{"dayPrice":30,"nightPrice":15,"dayStartHour":6,"nightStartHour":18}'),
+  ('pricing', '{"dayPrice":30,"nightPrice":15,"dayStartHour":6,"nightStartHour":18,"checkoutTime":"10:30"}'),
   ('garage_name', '"Garagem"'),
   ('booking', '{"maximumReservationAdvanceDays":14}'),
   ('admin_epoch', '0')

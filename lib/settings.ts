@@ -1,12 +1,12 @@
 import "server-only";
 import { iso, json, sql } from "./db";
 import { RULES } from "./rules";
-import { DEFAULT_PRICING, type PricingConfig } from "./pricing";
+import { withDefaults, type PricingConfig } from "./pricing";
 import { EMPTY_PIX, type PixConfig } from "./pix";
 
 export async function getPricing(): Promise<PricingConfig> {
   const r = await sql`select value from settings where key = 'pricing'`;
-  return (json(r[0]?.value) as PricingConfig) ?? DEFAULT_PRICING;
+  return withDefaults(json(r[0]?.value) as Partial<PricingConfig> | null); // configs antigas não têm checkoutTime
 }
 export async function getGarageName(): Promise<string> {
   const r = await sql`select value from settings where key = 'garage_name'`;

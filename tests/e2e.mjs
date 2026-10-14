@@ -56,9 +56,9 @@ await test("admin faz login e muda a antecedência máxima para 60 (configuraç�
   eq((await call("GET", "/api/config")).json.maximumReservationAdvanceDays, 60);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 0 }) })).status, 400);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 999 }) })).status, 400); });
-await test("preço 18:00→10:00 do dia seguinte = R$45; fuso salvo corretamente em UTC", async () => {
-  const r = await book(D(20), "18:00", D(21), "10:00", { jar: A }); eq(r.status, 201); eq(r.json.totalCents, 4500); resA = r.json; code = r.json.code;
-  const { rows } = await db.query("select start_at, end_at from reservations where total_cents = 4500 and start_at=$1", [Z(D(20), "18:00")]);
+await test("preço 18:00→10:00 do dia seguinte = R$15 (check-out até 10:30 não cobra a manhã); fuso salvo corretamente em UTC", async () => {
+  const r = await book(D(20), "18:00", D(21), "10:00", { jar: A }); eq(r.status, 201); eq(r.json.totalCents, 1500); resA = r.json; code = r.json.code;
+  const { rows } = await db.query("select start_at, end_at from reservations where total_cents = 1500 and start_at=$1", [Z(D(20), "18:00")]);
   eq(rows[0].start_at.toISOString(), Z(D(20), "18:00")); eq(rows[0].end_at.toISOString(), Z(D(21), "10:00")); });
 await test("MATRIZ de sobreposição com 10:00→12:00", async () => {
   const d = D(23); eq((await book(d, "10:00", d, "12:00")).status, 201);
@@ -67,10 +67,10 @@ await test("MATRIZ de sobreposição com 10:00→12:00", async () => {
   await t("12:00", "14:00", 201); // entrada exatamente na saída
   await t("08:00", "10:00", 201); // saída exatamente na entrada
   await t("11:30", "12:30", 409); await t("07:00", "08:30", 409); await t("07:00", "08:00", 201); });
-await test("preços e virada de meia-noite: 18→06=15; 18→10(dia seguinte)=45; 23:30→01:00=15; 00:00→06:00=15; 06→18=30; 05→07=45; 10→11=30", async () => {
+await test("preços e virada de meia-noite: 18→06=15; 18→10(dia seguinte)=15; 23:30→01:00=15; 00:00→06:00=15; 06→18=30; 05→07=15 (check-out); 10→11=30", async () => {
   const p = async (d1, t1, d2, t2, cents) => { const r = await book(d1, t1, d2, t2); eq(r.status, 201, `${d1} ${t1}`); eq(r.json.totalCents, cents, `${t1}→${t2}`); };
-  await p(D(25), "18:00", D(26), "06:00", 1500); await p(D(27), "18:00", D(28), "10:00", 4500); await p(D(29), "23:30", D(30), "01:00", 1500);
-  await p(D(31), "00:00", D(31), "06:00", 1500); await p(D(32), "06:00", D(32), "18:00", 3000); await p(D(33), "05:00", D(33), "07:00", 4500); await p(D(34), "10:00", D(34), "11:00", 3000); });
+  await p(D(25), "18:00", D(26), "06:00", 1500); await p(D(27), "18:00", D(28), "10:00", 1500); await p(D(29), "23:30", D(30), "01:00", 1500);
+  await p(D(31), "00:00", D(31), "06:00", 1500); await p(D(32), "06:00", D(32), "18:00", 3000); await p(D(33), "05:00", D(33), "07:00", 1500); await p(D(34), "10:00", D(34), "11:00", 3000); });
 await test("virada de dia salva as datas certas (23:30→01:00 = 02:30 UTC → 04:00 UTC)", async () => {
   const { rows } = await db.query("select start_at, end_at from reservations where start_at=$1", [Z(D(29), "23:30")]); eq(rows[0].end_at.toISOString(), Z(D(30), "01:00")); });
 await test("disponibilidade pública não vaza nada além de início/fim", async () => {
@@ -101,7 +101,7 @@ await test("rate limit de reservas: 9ª tentativa do mesmo IP em 1h → 429", as
 await test("minhas reservas: dono vê só as suas, sem dados pessoais; outros não veem nada", async () => {
   resA2 = (await book(D(42), "10:00", D(42), "12:00", { jar: A })).json; eq(resA2.totalCents, 3000);
   const a = await call("GET", "/api/minhas-reservas", { jar: A }); eq(a.json.length, 2);
-  assert.deepEqual(Object.keys(a.json[0]).sort(), ["end", "id", "shortId", "start", "status", "totalCents"]);
+  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "id", "shortId", "start", "status", "totalCents"]);
   for (const s of ["João", "ABC1D23", "Argo"]) assert.ok(!a.text.includes(s));
   eq((await call("GET", "/api/minhas-reservas", { jar: B })).json.length, 0); eq((await call("GET", "/api/minhas-reservas")).json.length, 0); });
 await test("código de acompanhamento vincula a outro aparelho; errado → 404; 11 tentativas → 429", async () => {
@@ -168,10 +168,10 @@ await test("PREÇO: cotação com preços atuais não altera nada; editar horár
   const d = D(47); const q = await call("POST", "/api/admin/quote", { jar: ADM, body: { startAt: iso(d, "10:00"), endAt: iso(d, "19:00") } }); eq(q.json.totalCents, 4500);
   eq((await detail(mid)).total_cents, 3000);
   eq((await call("PATCH", `/api/admin/reservations/${mid}`, { jar: ADM, body: { endAt: iso(d, "19:00") } })).status, 200);
-  const x = await detail(mid); eq(x.total_cents, 3000); const ev = x.events.find((e) => e.action === "editada"); assert.ok(ev.details.changes["saída"]); eq(ev.details.preco, "mantido"); assert.ok(!ev.details.changes["valor"]); });
+  const x = await detail(mid); eq(x.total_cents, 3000); eq(x.price_breakdown, null); /* detalhamento do horário antigo não vale mais */ const ev = x.events.find((e) => e.action === "editada"); assert.ok(ev.details.changes["saída"]); eq(ev.details.preco, "mantido"); assert.ok(!ev.details.changes["valor"]); });
 await test("PREÇO: 'recalcular' é explícito, aplica preços atuais e audita de→para", async () => {
   eq((await call("PATCH", `/api/admin/reservations/${mid}`, { jar: ADM, body: { endAt: iso(D(47), "20:00"), priceMode: "recalc" } })).status, 200);
-  const x = await detail(mid); eq(x.total_cents, 4500); const ev = x.events.filter((e) => e.action === "editada").at(-1); eq(ev.details.preco, "recalculado"); assert.ok(ev.details.changes["valor"].from !== ev.details.changes["valor"].to); });
+  const x = await detail(mid); eq(x.total_cents, 4500); eq(x.price_breakdown.totalCents, 4500); eq(x.price_breakdown.periods.length, 2); const ev = x.events.filter((e) => e.action === "editada").at(-1); eq(ev.details.preco, "recalculado"); assert.ok(ev.details.changes["valor"].from !== ev.details.changes["valor"].to); });
 await test("PREÇO: valor manual é permitido e auditado (de→para); dados do veículo também", async () => {
   eq((await call("PATCH", `/api/admin/reservations/${mid}`, { jar: ADM, body: { totalCents: 1234, plate: "NEW1A23", carColor: "Preto" } })).status, 200);
   const x = await detail(mid); eq(x.total_cents, 1234); const ev = x.events.at(-1); eq(ev.details.preco, "manual"); assert.ok(ev.details.changes["valor"].to.includes("12,34")); eq(ev.details.changes["placa"].from, "XYZ9K88"); eq(ev.details.changes["placa"].to, "NEW1A23"); eq(ev.details.changes["cor"].to, "Preto"); });
@@ -215,10 +215,29 @@ await test("exclusion constraint no banco recusa sobreposição mesmo sem passar
 await test("MUDAR PREÇO: vale só p/ novas reservas, antigas não mudam, mudança auditada", async () => {
   const old = (await db.query("select total_cents from reservations where start_at=$1", [Z(D(20), "18:00")])).rows[0].total_cents;
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ garageName: "Garagem Bloco A", pricing: { dayPrice: 40, nightPrice: 20, dayStartHour: 6, nightStartHour: 18 } }) })).status, 200);
-  eq((await book(D(51), "18:00", D(52), "10:00")).json.totalCents, 6000); eq((await db.query("select total_cents from reservations where start_at=$1", [Z(D(20), "18:00")])).rows[0].total_cents, old);
+  eq((await book(D(51), "18:00", D(52), "10:00")).json.totalCents, 2000); eq((await db.query("select total_cents from reservations where start_at=$1", [Z(D(20), "18:00")])).rows[0].total_cents, old);
   assert.match((await call("GET", "/")).text, /Garagem Bloco A/); assert.ok((await call("GET", "/api/admin/settings", { jar: ADM })).json.history.length >= 2);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ pricing: { dayPrice: -5, nightPrice: 1, dayStartHour: 6, nightStartHour: 18 } }) })).status, 400); });
+await test("CHECK-OUT: config pública traz o horário (padrão 10:30) e cada reserva grava o detalhamento", async () => {
+  eq((await call("GET", "/api/config")).json.pricing.checkoutTime, "10:30");
+  const r = await book(D(55), "20:00", D(57), "10:00", { jar: A }); eq(r.status, 201); eq(r.json.totalCents, 6000); // 2 noites + 1 dia, manhã da saída grátis
+  const b = r.json.breakdown; assert.deepEqual(b.periods.map((p) => p.kind), ["noite", "dia", "noite", "dia"]); eq(b.periods[3].waived, true); eq(b.periods[3].cents, 0);
+  eq(b.periods[0].start, `${D(55)}T20:00`); eq(b.periods[3].end, `${D(57)}T10:00`); eq(b.totalCents, 6000); eq(b.checkoutTime, "10:30");
+  eq((await dbRow((await db.query("select id from reservations where start_at=$1", [Z(D(55), "20:00")])).rows[0].id)).price_breakdown.totalCents, 6000);
+  const mine = (await call("GET", "/api/minhas-reservas", { jar: A })).json.find((x) => x.start === Z(D(55), "20:00")); eq(mine.breakdown.periods.length, 4);
+  eq((await book(D(58), "20:00", D(59), "10:30")).json.totalCents, 1500); // exatamente no limite
+  eq((await book(D(59), "20:00", D(60), "10:31")).json.totalCents, 4500); }); // 1 minuto depois: cobra a manhã
+await test("CHECK-OUT: só vale para quem pernoitou (07:00→10:00 no mesmo dia = R$30)", async () => {
+  const r = await book(D(50), "07:00", D(50), "10:00"); eq(r.json.totalCents, 3000); eq(r.json.breakdown.periods.length, 1); assert.ok(!r.json.breakdown.periods[0].waived); });
+await test("CHECK-OUT configurável: 11:00 amplia; fora do intervalo dia→noite = 400; igual ao início do dia desliga", async () => {
+  const pr = (checkoutTime) => cfg({ pricing: { dayPrice: 30, nightPrice: 15, dayStartHour: 6, nightStartHour: 18, checkoutTime } });
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pr("11:00") })).status, 200); eq((await call("GET", "/api/config")).json.pricing.checkoutTime, "11:00");
+  eq((await book(D(52), "20:00", D(53), "10:45")).json.totalCents, 1500);
+  for (const t of ["05:00", "18:00", "25:00", "abc"]) eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pr(t) })).status, 400, t);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pr("06:00") })).status, 200);
+  eq((await book(D(53), "20:00", D(54), "10:00")).json.totalCents, 4500); // sem tolerância
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.pricing.checkoutTime, "10:30"); });
 await test("voltar a antecedência para 14 passa a valer na hora (dia+20 → 400)", async () => {
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14 }) })).status, 200);
   eq((await book(D(20), "08:00", D(20), "09:00")).status, 400); eq((await call("GET", "/api/config")).json.maximumReservationAdvanceDays, 14); });
