@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { brl } from "@/lib/pricing";
 import { effectiveStatus } from "@/lib/status";
+import PriceBreakdown from "../PriceBreakdown";
 import { api, ApiError, fmtDT, fromLocalInput, toLocalInput } from "@/lib/client";
 
 export type Mode = { id?: string; kind?: "manual" | "bloqueio" };
@@ -102,6 +103,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
           <label className="col-span-2">{block ? "Motivo (não aparece para vizinhos)" : "Observações"}<textarea rows={2} className={inp} value={f.notes} onChange={set("notes")} /></label>
         </div>
 
+        {mode.id && detail && !timesChanged && !block && <PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents} className="rounded-xl bg-concreto p-3" />}
         {mode.id && detail && timesChanged && !valueEdited && !block && (
           <fieldset className="rounded-xl border border-faixa bg-faixa/10 p-3">
             <legend className="px-1 font-semibold">Horário alterado — e o valor?</legend>

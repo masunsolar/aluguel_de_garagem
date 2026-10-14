@@ -8,7 +8,7 @@ export async function GET() {
 export async function PUT(req: Request) {
   const denied = await requireAdmin(); if (denied) return denied;
   const p = settingsSchema.safeParse(await req.json().catch(() => null));
-  if (!p.success) return Response.json({ error: "Valores inválidos." }, { status: 400 });
+  if (!p.success) return Response.json({ error: p.error.issues.find((i) => i.code === "custom")?.message ?? "Valores inválidos." }, { status: 400 });
   await saveSettings(p.data.pricing, p.data.garageName, p.data.maximumReservationAdvanceDays, p.data.pix);
   return Response.json({ ok: true });
 }

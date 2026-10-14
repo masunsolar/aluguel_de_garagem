@@ -20,6 +20,8 @@ export default function Settings() {
       {([["dayPrice", "Dia (R$)"], ["nightPrice", "Noite (R$)"], ["dayStartHour", "Dia começa (h)"], ["nightStartHour", "Noite começa (h)"]] as const).map(([k, l]) => (
         <label key={k}>{l}<input type="number" step="0.01" className={input} value={s.pricing[k]} onChange={num(k)} /></label>
       ))}
+      <label>Check-out até<input type="time" className={input} value={s.pricing.checkoutTime ?? "10:30"} onChange={(e) => setS({ ...s, pricing: { ...s.pricing, checkoutTime: e.target.value } })} /></label>
+      <p className="w-full text-xs text-asfalto/60">Quem pernoita e sai até o check-out não paga a manhã. O dia continua começando no horário acima. Para desligar, use o mesmo horário do início do dia.</p>
       <fieldset className="w-full rounded-lg border border-asfalto/15 p-3">
         <legend className="px-1 text-sm">PIX para pagamento (vizinhos veem esta chave)</legend>
         <div className="flex flex-wrap gap-3">
@@ -31,7 +33,7 @@ export default function Settings() {
       </fieldset>
       <button className="rounded-lg bg-asfalto px-4 py-2.5 text-white">Salvar</button>
       {msg && <span role="status">{msg}</span>}
-      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços", pix: "PIX", booking: "antecedência" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
+      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "antecedência" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
     </form>
   );
 }

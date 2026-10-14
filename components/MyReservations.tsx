@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { brl } from "@/lib/pricing";
 import PixBox from "./PixBox";
+import PriceBreakdown from "./PriceBreakdown";
 import type { PixConfig } from "@/lib/pix";
 
 const LABEL: Record<string, string> = { pendente: "Pendente", confirmada: "Confirmada", em_andamento: "Em andamento", finalizada: "Finalizada", cancelada: "Cancelada", em_analise: "Em análise" };
@@ -34,6 +35,7 @@ export default function MyReservations() {
             <div><div>{fmt(r.start)} → {fmt(r.end)}</div><div className="text-sm text-asfalto/60">#{r.shortId} • {LABEL[r.status] ?? r.status}</div></div>
             <div className="text-right"><b>{brl(r.totalCents)}</b>{["pendente", "confirmada"].includes(r.status) && new Date(r.start) > new Date() && <button onClick={() => cancel(r.id)} className="block text-sm text-ocupado underline">Cancelar</button>}</div>
            </div>
+           {r.breakdown && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Ver o que foi cobrado</summary><PriceBreakdown breakdown={r.breakdown} chargedCents={r.totalCents} className="mt-1" /></details>}
            {["pendente", "confirmada"].includes(r.status) && new Date(r.end) > new Date() && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Pagar via PIX</summary><PixBox pix={pix} totalCents={r.totalCents} /></details>}
           </li>
         ))}
