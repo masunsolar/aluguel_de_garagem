@@ -24,7 +24,9 @@ export default function Painel() {
     (!from || new Date(r.start_at).toISOString() >= new Date(from + "T00:00:00-03:00").toISOString()) &&
     (!to || new Date(r.start_at).toISOString() <= new Date(to + "T23:59:59-03:00").toISOString()) &&
     (!q || [r.name, r.apartment, r.plate, r.car_model].join(" ").toLowerCase().includes(q.toLowerCase())));
-  const revenue = list.filter((r) => ["confirmada", "em_andamento", "finalizada"].includes(r.status)).reduce((s, r) => s + r.total_cents, 0);
+  const valid = list.filter((r) => ["pendente", "confirmada", "em_andamento", "finalizada", "irregular"].includes(r.status));
+  const received = valid.filter((r) => r.payment_status === "pago").reduce((s, r) => s + r.total_cents, 0);
+  const toReceive = valid.filter((r) => r.payment_status !== "pago").reduce((s, r) => s + r.total_cents, 0);
 
   return (
     <main className="mx-auto max-w-5xl space-y-5 px-4 py-8">
@@ -43,7 +45,10 @@ export default function Painel() {
         <input className={sel} placeholder="Buscar nome, apto, placa…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="text-sm">De<input className={sel + " block"} type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label className="text-sm">Até<input className={sel + " block"} type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-        <div className="ml-auto text-right"><div className="text-sm text-asfalto/70">Arrecadado (filtro atual)</div><div className="text-2xl font-bold text-livre">{brl(revenue)}</div></div>
+        <div className="ml-auto flex gap-5 text-right">
+          <div><div className="text-sm text-asfalto/70">Recebido (filtro atual)</div><div className="text-2xl font-bold text-livre">{brl(received)}</div></div>
+          <div><div className="text-sm text-asfalto/70">A receber</div><div className="text-2xl font-bold">{brl(toReceive)}</div></div>
+        </div>
       </section>
 
       <section className="space-y-3">
@@ -59,6 +64,8 @@ export default function Painel() {
               {r.notes && <div className="text-sm italic text-asfalto/60">{r.notes}</div>}
             </div>
             {r.photo_count > 0 && <span className="text-sm text-asfalto/60">📷 {r.photo_count}</span>}
+            {r.status !== "bloqueada" && <span className={`rounded-full px-3 py-1 text-sm ${r.payment_status === "pago" ? "bg-livre/15 text-livre" : r.receipt_count > 0 ? "bg-faixa/40" : "bg-faixa/20"}`}>
+              {r.payment_status === "pago" ? "pago" : r.receipt_count > 0 ? "🧾 comprovante a conferir" : "pagamento pendente"}</span>}
             {r.source === "admin" && <span className="text-sm text-asfalto/60">manual</span>}
             <span className="font-semibold">{brl(r.total_cents)}</span>
             <span title={effectiveStatus(r) !== r.status ? `Gravado: ${r.status}. Exibido pelo horário (automático).` : undefined} className={`rounded-full px-3 py-1 text-sm ${BADGE[effectiveStatus(r)]}`}>{effectiveStatus(r).replace("_", " ")}</span>

@@ -3,6 +3,7 @@ export const RULES = {
   minMinutes: 30,          // reserva mínima
   maxDurationDays: 14,     // reserva máxima
   maxPhotos: 10,           // por reserva
+  maxReceipts: 3,          // comprovantes por reserva (enviados pelo vizinho)
   maxPhotoBytes: 2_000_000,
   advanceDaysMax: 60,      // teto do que o painel pode configurar (o calendário mostra até isso)
   advanceDaysDefault: 14,  // padrão de maximumReservationAdvanceDays

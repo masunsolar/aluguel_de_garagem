@@ -46,6 +46,7 @@ export default function Booking() {
         <div className="mt-2 rounded-lg bg-concreto p-3 text-sm">Código para acompanhar em outro aparelho: <b className="select-all">{done.code}</b><br />Guarde-o: ele não será mostrado de novo.</div>
       </dl>
       <PixBox pix={pix} totalCents={done.totalCents} />
+      <p className="mt-3 rounded-lg bg-faixa/20 p-3 text-sm">Pagamento <b>pendente</b>. Depois de pagar, envie o comprovante em <b>“Minhas reservas”</b> (foto da tela ou PDF).</p>
       <button className="mt-5 rounded-lg bg-asfalto px-4 py-2.5 text-white" onClick={() => { setDone(null); setOpen(false); setVer((v) => v + 1); load(); }}>Voltar</button>
     </div>
   );

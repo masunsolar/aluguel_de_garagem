@@ -4,6 +4,7 @@ import { brl } from "@/lib/pricing";
 import { effectiveStatus } from "@/lib/status";
 import PriceBreakdown from "../PriceBreakdown";
 import { api, ApiError, fmtDT, fromLocalInput, toLocalInput } from "@/lib/client";
+import { shrink } from "@/lib/image";
 
 export type Mode = { id?: string; kind?: "manual" | "bloqueio" };
 const STATUSES = ["pendente", "confirmada", "em_andamento", "finalizada", "cancelada", "irregular", "bloqueada"];
@@ -18,18 +19,10 @@ function describe(e: any) {
   if (e.action === "criada_manualmente") return "Registro criado manualmente pelo administrador";
   if (e.action === "status_alterado") return `${d.from === "bloqueada" ? "Bloqueio removido" : d.to === "confirmada" ? "Confirmada" : d.to === "cancelada" ? "Cancelada" : d.to === "irregular" ? "Marcada como irregular" : `Status: ${d.to}`}${d.from ? ` (antes: ${d.from})` : ""}${Object.keys(d.changes ?? {}).length ? " • " + Object.entries<any>(d.changes).map(([k, v]) => `${k}: ${v.from ?? "—"} → ${v.to ?? "—"}`).join(" • ") : ""}`;
   if (e.action === "foto_adicionada") return "Foto adicionada pelo administrador";
+  if (e.action === "comprovante_enviado") return "Comprovante de pagamento enviado pelo vizinho";
   if (e.action === "excluida") return "Excluída pelo administrador";
   if (e.action === "editada") return Object.entries<any>(d.changes ?? {}).map(([k, v]) => `${k}: ${v.from ?? "—"} → ${v.to ?? "—"}`).join(" • ") + (d.preco ? ` (valor ${d.preco})` : "");
   return e.action;
-}
-
-// Reduz a foto no navegador (máx. 1280px, JPEG) antes de enviar: rápido no celular e cabe no plano gratuito.
-async function shrink(file: File): Promise<Blob> {
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement("canvas"); c.width = bmp.width * k; c.height = bmp.height * k;
-  c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
-  return new Promise((ok, no) => c.toBlob((b) => (b ? ok(b) : no(new Error("Imagem inválida."))), "image/jpeg", 0.8));
 }
 
 export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode; onClose: () => void; onSaved: () => void; onOpen: (id: string) => void }) {
@@ -56,13 +49,14 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     return () => clearTimeout(t);
   }, [f.startAt, f.endAt, f.status, timesChanged]); // eslint-disable-line
 
-  async function save(status?: string) {
+  async function save(status?: string, paymentStatus?: "pendente" | "pago") {
     setErr(""); setConflicts([]); setBusy(true);
     try {
       const body: any = { startAt: fromLocalInput(f.startAt), endAt: fromLocalInput(f.endAt), status: status ?? f.status, name: f.name, apartment: f.apartment, carBrand: f.carBrand, carModel: f.carModel, carColor: f.carColor, plate: f.plate, notes: f.notes };
       if (mode.id && valueEdited) body.totalCents = Math.round(Number(f.total) * 100);
       if (mode.id && timesChanged && !valueEdited) body.priceMode = priceMode;
       if (!mode.id && f.total !== "") body.totalCents = Math.round(Number(f.total) * 100);
+      if (paymentStatus) body.paymentStatus = paymentStatus;
       await api(mode.id ? `/api/admin/reservations/${mode.id}` : "/api/admin/reservations", mode.id ? "PATCH" : "POST", body);
       onSaved();
     } catch (e) { setErr((e as Error).message); setConflicts(e instanceof ApiError ? e.conflicts : []); } finally { setBusy(false); }
@@ -113,10 +107,27 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
           </fieldset>
         )}
         {mode.id && detail && <>
+          {!block && (
+            <div className={`rounded-xl border p-3 ${detail.payment_status === "pago" ? "border-livre bg-livre/10" : "border-faixa bg-faixa/10"}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="mr-auto font-semibold">Pagamento: {detail.payment_status === "pago" ? <span className="text-livre">pago{detail.paid_at ? ` em ${fmtDT(detail.paid_at)}` : ""}</span> : "pendente"}</h3>
+                {detail.payment_status === "pago"
+                  ? <button disabled={busy} onClick={() => save(undefined, "pendente")} className="rounded-lg border border-asfalto/30 px-3 py-1.5 text-sm">Voltar para pendente</button>
+                  : <button disabled={busy} onClick={() => save(undefined, "pago")} className="rounded-lg bg-livre px-3 py-1.5 text-sm font-semibold text-white">Marcar como pago</button>}
+              </div>
+              {detail.receipts.length === 0 ? <p className="mt-1 text-sm text-asfalto/60">Nenhum comprovante enviado pelo vizinho.</p> : (
+                <div className="mt-2 flex flex-wrap gap-2">{detail.receipts.map((c: any) => (
+                  <a key={c.id} href={`/api/admin/receipts/${c.id}`} target="_blank" className="block w-24 text-center text-xs underline">
+                    {c.mime === "application/pdf" ? <div className="flex aspect-square items-center justify-center rounded-lg bg-white text-2xl">📄</div> : <img src={`/api/admin/receipts/${c.id}`} alt="Comprovante" className="aspect-square w-full rounded-lg object-cover" />}
+                    {fmtDT(c.created_at)}
+                  </a>))}</div>
+              )}
+            </div>
+          )}
           <div>
             <div className="flex items-center justify-between"><h3 className="font-semibold">Fotos (privadas)</h3>
               <label className="cursor-pointer rounded-lg border border-asfalto/20 px-3 py-1.5">+ Adicionar
-                <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => upload(e.target.files?.[0])} /></label></div>
+                <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => upload(e.target.files?.[0])} /></label></div>
             {detail.photos.length === 0 && <p className="mt-2 text-sm text-asfalto/60">Nenhuma foto ainda.</p>}
             <div className="mt-2 grid grid-cols-3 gap-2">{detail.photos.map((p: string) => <div key={p} className="relative"><a href={`/api/admin/photos/${p}`} target="_blank"><img src={`/api/admin/photos/${p}`} alt="Foto do veículo" className="aspect-square w-full rounded-lg object-cover" /></a><button aria-label="Remover foto" onClick={async () => { if (confirm("Remover esta foto?")) { await api(`/api/admin/photos/${p}`, "DELETE"); load(); } }} className="absolute right-1 top-1 rounded-full bg-asfalto/80 px-2 text-white">×</button></div>)}</div>
           </div>

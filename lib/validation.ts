@@ -15,11 +15,13 @@ export const reservationSchema = z.object({
 const txt = (n: number) => z.string().trim().max(n).regex(/^[^\u0000-\u0008\u000b-\u001f<>]*$/, "Caracteres inválidos").nullish();
 const dt = z.string().datetime({ offset: true });
 export const STATUSES = ["pendente", "confirmada", "em_andamento", "finalizada", "cancelada", "bloqueada", "irregular"] as const;
+export const PAYMENT_STATUSES = ["pendente", "pago"] as const;
 export const adminCreateSchema = z.object({
   startAt: dt, endAt: dt, status: z.enum(STATUSES).default("confirmada"),
   name: txt(80), apartment: txt(20), carBrand: txt(40), carModel: txt(40), carColor: txt(30),
   plate: plate.nullish().or(z.literal("")), notes: txt(1000),
   totalCents: z.number().int().min(0).max(10_000_000).nullish(),
+  paymentStatus: z.enum(PAYMENT_STATUSES).optional(), // ausente na criação = pendente
 });
 // priceMode só vale quando o horário muda: "keep" mantém o valor contratado, "recalc" usa os preços atuais (decisão explícita do admin)
 export const adminPatchSchema = adminCreateSchema.partial().extend({ priceMode: z.enum(["keep", "recalc"]).optional() });

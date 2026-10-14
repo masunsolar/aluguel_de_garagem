@@ -49,11 +49,11 @@ Nenhuma outra variável é usada. **Não** coloque valores reais no repositório
 4. `npm run dev` → http://localhost:3000 e http://localhost:3000/admin/login
 
 ## Testar no Neon sem tocar na produção (branch de teste)
-A suíte (`npm test`, 48 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
+A suíte (`npm test`, 53 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
 1. No Neon: *Branches* → **Create branch** (nome `teste`, a partir do principal) → *Connect* escolhendo esse branch → copie a string dele.
 2. Em `.env.local` use a string **do branch** em `DATABASE_URL`, o `ADMIN_PASSWORD_HASH` de uma senha de teste e um `AUTH_SECRET`.
 3. `npm run db:init` → `npm run build` → `PORT=3100 npm start`
-4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `48 passaram, 0 falharam`.
+4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `53 passaram, 0 falharam`.
 5. Apague o branch `teste` no Neon.
 Isso valida o driver do Neon de verdade (consultas, constraints, triggers, concorrência). Se algo falhar só no Neon, é a informação mais valiosa antes de publicar.
 
@@ -102,3 +102,9 @@ Alterações ficam no histórico de configurações.
 - **Check-out** (`checkoutTime`, padrão 10:30, em *Configurações*): quem pernoitou e sai até esse horário não paga o "dia" da manhã da saída. O dia continua começando em `dayStartHour`. Para desligar, use o mesmo horário do início do dia.
 - Cada reserva grava em `price_breakdown` os períodos contabilizados (dia/noite, horários e valores). O vizinho vê a tabela na prévia, na confirmação e em "Minhas reservas"; o admin vê no editor. Reservas antigas ficam sem detalhamento.
 - **Atualização de um banco existente:** rode `npm run db:init` apontando para ele **antes** de publicar esta versão (adiciona a coluna `price_breakdown`; não apaga nada).
+
+## Pagamento e comprovante
+- Toda reserva entra com **pagamento pendente** (separado do status da reserva). O admin marca **pago** / **voltar para pendente** no editor; a data do pagamento fica registrada e auditada.
+- O vizinho envia o comprovante (foto/print da galeria ou PDF, até 2 MB, até 3 por reserva) em "Minhas reservas". Enviar comprovante **não** marca como pago: o admin confere e marca.
+- Comprovantes são privados: só o admin vê, em `/api/admin/receipts/{id}`.
+- Fotos do veículo agora podem vir da galeria (antes o celular abria só a câmera).
