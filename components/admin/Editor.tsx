@@ -29,7 +29,7 @@ function describe(e: any) {
 
 export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode; onClose: () => void; onSaved: () => void; onOpen: (id: string) => void }) {
   const [f, setF] = useState({ ...blank, status: mode.kind === "bloqueio" ? "bloqueada" : "confirmada" });
-  const [detail, setDetail] = useState<any>(null); const [pixKey, setPixKey] = useState("");
+  const [detail, setDetail] = useState<any>(null); const [pixKey, setPixKey] = useState(""); const [chargeTpl, setChargeTpl] = useState("");
   const [priceMode, setPriceMode] = useState<"keep" | "recalc">("keep"); const [newQuote, setNewQuote] = useState<number | null>(null);
   const [err, setErr] = useState(""); const [conflicts, setConflicts] = useState<{ id: string; label: string }[]>([]); const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -41,7 +41,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     setF({ startAt: toLocalInput(d.start_at), endAt: toLocalInput(d.end_at), status: d.status, name: d.name ?? "", apartment: d.apartment ?? "", carBrand: d.car_brand ?? "", carModel: d.car_model ?? "", carColor: d.car_color ?? "", plate: d.plate ?? "", phone: d.phone ?? "", notes: d.notes ?? "", total: (d.total_cents / 100).toFixed(2) });
   };
   useEffect(() => { load().catch((e) => setErr(e.message)); }, []); // eslint-disable-line
-  useEffect(() => { if (mode.id) api("/api/admin/settings").then((c) => setPixKey(c.pix?.key ?? "")).catch(() => {}); }, []); // eslint-disable-line
+  useEffect(() => { if (mode.id) api("/api/admin/settings").then((c) => { setPixKey(c.pix?.key ?? ""); setChargeTpl(c.chargeTemplate ?? ""); }).catch(() => {}); }, []); // eslint-disable-line
 
   const timesChanged = !!detail && !!f.startAt && !!f.endAt && (f.startAt !== toLocalInput(detail.start_at) || f.endAt !== toLocalInput(detail.end_at));
   const valueEdited = !!detail && f.total !== "" && Math.round(Number(f.total) * 100) !== detail.total_cents;
@@ -83,7 +83,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
   function charge() {
     const items = detail?.charge ?? [];
     if (!items.length) return;
-    const url = waLink(f.phone, chargeMessage(f.name, items, pixKey));
+    const url = waLink(f.phone, chargeMessage(f.name, items, pixKey, chargeTpl));
     window.open(url, "_blank", "noopener");
     api(`/api/admin/reservations/${mode.id}/cobranca`, "POST").then(load).catch(() => {}); // só histórico; falhar aqui não impede a cobrança
   }

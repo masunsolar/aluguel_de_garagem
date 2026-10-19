@@ -358,6 +358,19 @@ await test("COBRANÇA: detalhe traz as pendências do apto (+ a própria, mesmo 
   eq((await call("POST", `/api/admin/reservations/x/cobranca`, { jar: ADM })).status, 404);
   eq((await call("PATCH", `/api/admin/reservations/${fut}`, { jar: ADM, body: { paymentStatus: "pago" } })).status, 200);
   assert.ok(!(await detail(fut)).charge.some((c) => c.id === fut)); });
+await test("MENSAGEM DE COBRANÇA: admin edita (auditado); PUT sem o campo mantém; vazio volta ao padrão; caractere de controle → 400; só admin", async () => {
+  const tpl = "Olá {nome}\n{reservas}\nTotal {total}\nPIX {pix}";
+  eq((await call("PUT", "/api/admin/settings", { body: cfg({ chargeTemplate: tpl }) })).status, 401);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, chargeTemplate: tpl }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.chargeTemplate, tpl);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14 }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.chargeTemplate, tpl);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, chargeTemplate: "a\u0007b" }) })).status, 400);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, chargeTemplate: "x".repeat(1501) }) })).status, 400);
+  assert.ok((await db.query("select 1 from reservation_events where action='configuracao_alterada' and details->>'chave'='charge_template'")).rowCount >= 1);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, chargeTemplate: "" }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.chargeTemplate, "");
+  assert.ok(!(await call("GET", "/api/config")).text.includes("reservas}")); }); // não vaza na config pública
 await test("funções puras: apartamento normalizado e link do WhatsApp", async () => {
   let A_, W; try { A_ = await import("../lib/apartment.ts"); W = await import("../lib/whatsapp.ts"); } catch { console.log("      (Node sem suporte a importar .ts: teste ignorado)"); return; }
   for (const v of ["101", "Apto 101", "ap. 101", " AP 101 ", "apartamento 101"]) eq(A_.apartmentKey(v), "101");
