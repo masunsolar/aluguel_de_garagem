@@ -26,13 +26,25 @@ export async function getPix(): Promise<PixConfig> {
   const v = json(r[0]?.value);
   return v && typeof v.key === "string" ? { key: v.key, name: String(v.name ?? ""), city: String(v.city ?? "") } : EMPTY_PIX;
 }
-export async function getAdvanceDays(): Promise<number> {
+async function getBooking() {
   const r = await sql`select value from settings where key = 'booking'`;
-  const n = Number(json(r[0]?.value)?.maximumReservationAdvanceDays);
+  return (json(r[0]?.value) ?? {}) as { maximumReservationAdvanceDays?: unknown; maxUnpaidReservations?: unknown };
+}
+export async function getAdvanceDays(): Promise<number> {
+  const n = Number((await getBooking()).maximumReservationAdvanceDays);
   return Number.isInteger(n) && n >= 1 ? n : RULES.advanceDaysDefault;
 }
-export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig) {
-  await saveSetting("booking", { maximumReservationAdvanceDays });
+/** Limite de pagamentos pendentes por apartamento. null = bloqueio desligado. Config antiga (sem a chave) = padrão. */
+export async function getMaxUnpaid(): Promise<number | null> {
+  const b = await getBooking();
+  if (!("maxUnpaidReservations" in b)) return RULES.maxUnpaidDefault;
+  const n = b.maxUnpaidReservations;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
+}
+export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null) {
+  // ausente = mantém o valor atual (quem chama sem o campo não desliga o bloqueio sem querer)
+  const maxUnpaid = maxUnpaidReservations === undefined ? await getMaxUnpaid() : maxUnpaidReservations;
+  await saveSetting("booking", { maximumReservationAdvanceDays, maxUnpaidReservations: maxUnpaid });
   await saveSetting("pricing", pricing);
   await saveSetting("garage_name", garageName);
   if (pix) await saveSetting("pix", pix);

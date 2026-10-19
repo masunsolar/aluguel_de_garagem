@@ -89,7 +89,7 @@ export default function Booking() {
 }
 
 function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
-  const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", website: "" });
+  const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", website: "" });
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
 
@@ -108,33 +108,37 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
 
   return (
     <div className="fixed inset-0 z-10 flex items-end justify-center bg-asfalto/60 sm:items-center" role="dialog" aria-modal="true">
-      <form onSubmit={submit} className="max-h-[92vh] w-full max-w-lg space-y-3 overflow-y-auto rounded-t-2xl bg-white p-5 sm:rounded-2xl">
-        <h2 className="text-xl font-bold">Nova reserva</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <label>Entrada<input className={field} type="date" min={brtDay(new Date())} max={maxDate} value={f.startDate} onChange={set("startDate")} required /></label>
-          <label>Hora<input className={field} type="time" value={f.startTime} onChange={set("startTime")} required /></label>
-          <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
-          <label>Hora<input className={field} type="time" value={f.endTime} onChange={set("endTime")} required /></label>
+      <form onSubmit={submit} className="flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl">
+        {/* Só o miolo rola; o rodapé fica fora da rolagem e nunca cobre o conteúdo (dvh = altura real no celular) */}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-5">
+          <h2 className="text-xl font-bold">Nova reserva</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <label>Entrada<input className={field} type="date" min={brtDay(new Date())} max={maxDate} value={f.startDate} onChange={set("startDate")} required /></label>
+            <label>Hora<input className={field} type="time" value={f.startTime} onChange={set("startTime")} required /></label>
+            <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
+            <label>Hora<input className={field} type="time" value={f.endTime} onChange={set("endTime")} required /></label>
+          </div>
+          <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
+          <label className="block">Nome do responsável<input className={field} value={f.name} onChange={set("name")} required /></label>
+          <div className="grid grid-cols-2 gap-3">
+            <label>Apartamento<input className={field} value={f.apartment} onChange={set("apartment")} required /></label>
+            <label>Placa<input className={field} value={f.plate} onChange={(e) => { setErr(""); setF({ ...f, plate: e.target.value.toUpperCase() }); }} maxLength={8} placeholder="ABC1D23" required /></label>
+            <label>Marca<input className={field} value={f.carBrand} onChange={set("carBrand")} required /></label>
+            <label>Modelo<input className={field} value={f.carModel} onChange={set("carModel")} required /></label>
+            <label>Cor<input className={field} value={f.carColor} onChange={set("carColor")} required /></label>
+            <label>WhatsApp <span className="text-asfalto/60">(opcional)</span><input className={field} type="tel" inputMode="tel" autoComplete="tel" maxLength={25} value={f.phone} onChange={set("phone")} placeholder="(43) 99999-8888" /></label>
+          </div>
+          <div className="rounded-xl bg-concreto p-4">
+            {quote ? <>
+              <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
+              <div className="text-2xl font-bold">{brl(quote.totalCents)}</div>
+              <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
+            </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
+          </div>
+          <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>
         </div>
-        <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
-        <label className="block">Nome do responsável<input className={field} value={f.name} onChange={set("name")} required /></label>
-        <div className="grid grid-cols-2 gap-3">
-          <label>Apartamento<input className={field} value={f.apartment} onChange={set("apartment")} required /></label>
-          <label>Placa<input className={field} value={f.plate} onChange={(e) => { setErr(""); setF({ ...f, plate: e.target.value.toUpperCase() }); }} maxLength={8} placeholder="ABC1D23" required /></label>
-          <label>Marca<input className={field} value={f.carBrand} onChange={set("carBrand")} required /></label>
-          <label>Modelo<input className={field} value={f.carModel} onChange={set("carModel")} required /></label>
-          <label className="col-span-2">Cor<input className={field} value={f.carColor} onChange={set("carColor")} required /></label>
-        </div>
-        <div className="rounded-xl bg-concreto p-4">
-          {quote ? <>
-            <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
-            <div className="text-2xl font-bold">{brl(quote.totalCents)}</div>
-            <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
-          </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
-        </div>
-        <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>
-        {err && <p role="alert" className="rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
-        <div className="sticky bottom-0 -mx-5 -mb-5 flex gap-3 border-t border-asfalto/10 bg-white px-5 py-3">
+        {err && <p role="alert" className="mx-5 mb-2 max-h-32 shrink-0 overflow-y-auto rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
+        <div className="flex shrink-0 gap-3 border-t border-asfalto/10 bg-white px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-asfalto/20 px-4 py-3">Cancelar</button>
           <button disabled={loading || !quote} className="flex-1 rounded-lg bg-asfalto px-4 py-3 font-semibold text-white disabled:opacity-50">{loading ? "Reservando…" : "Confirmar reserva"}</button>
         </div>

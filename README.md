@@ -88,7 +88,8 @@ Isso valida o driver do Neon de verdade (consultas, constraints, triggers, conco
 - Cookies são **assinados, não criptografados**: o do vizinho guarda IDs de reservas dele (sem dados pessoais).
 - Limite por IP: vizinhos no mesmo Wi-Fi dividem a cota de 8 reservas/hora.
 - Edições simultâneas do mesmo registro por duas abas do admin: vale a última (há um único administrador).
-- Não há cobrança automática: o PIX é só exibido ao vizinho e você confirma o recebimento no painel. E-mail e WhatsApp não existem.
+- Não há cobrança automática: o botão **Cobrar no WhatsApp** só abre a conversa com a mensagem pronta; quem envia é você. Não há e-mail.
+- O bloqueio por pendências usa o **apartamento digitado** pelo vizinho (não há login): quem digitar outro número escapa do bloqueio, e quem digitar o número de um apartamento com pendências fica sabendo que ele tem pendências (sem valores nem datas).
 
 
 ## PIX
@@ -108,3 +109,11 @@ Alterações ficam no histórico de configurações.
 - O vizinho envia o comprovante (foto/print da galeria ou PDF, até 2 MB, até 3 por reserva) em "Minhas reservas". Enviar comprovante **não** marca como pago: o admin confere e marca.
 - Comprovantes são privados: só o admin vê, em `/api/admin/receipts/{id}`.
 - Fotos do veículo agora podem vir da galeria (antes o celular abria só a câmera).
+
+## Pendências e cobrança
+- **Bloqueio por pendências** (`maxUnpaidReservations`, padrão **1**, em *Configurações*): o apartamento com **mais** pendências que o limite não consegue fazer novas reservas (403, mensagem sem detalhes). 1 = bloqueia a partir da 2ª; 0 = bloqueia com qualquer uma; vazio = desligado. Reservas manuais do admin nunca são bloqueadas.
+- Conta como pendência (`lib/services/debts.ts`): reserva **já começada** (a vaga foi usada), pagamento pendente, não cancelada/bloqueada/excluída e **sem comprovante enviado**. Reservas futuras não contam; enviar o comprovante já libera o vizinho enquanto você confere.
+- O apartamento é comparado normalizado (`lib/apartment.ts`): "Apto 101", "ap. 101" e "101" são o mesmo.
+- **WhatsApp** (opcional): o vizinho pode informar no formulário; você edita no painel. Guardado só com dígitos e visível só para o admin.
+- **Cobrar no WhatsApp** (editor, pagamento pendente): abre `wa.me` com a mensagem pronta listando todas as reservas em aberto do apartamento (as já usadas + a atual), o total e a chave PIX. Sem telefone válido, o WhatsApp abre para você escolher o contato. Cada reserva cobrada registra "Cobrança aberta no WhatsApp" no histórico.
+- **Atualização de um banco existente:** rode `npm run db:init` antes de publicar esta versão (adiciona a coluna `phone`; não apaga nada).
