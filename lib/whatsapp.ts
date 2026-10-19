@@ -1,4 +1,4 @@
-// Cobrança pelo WhatsApp sem API paga: o painel monta um link wa.me com a mensagem pronta;
+// Cobrança pelo WhatsApp sem API paga: o painel monta um link de conversa com a mensagem pronta;
 // o admin só confere e aperta "enviar" no próprio WhatsApp. Funções puras (navegador e testes).
 import { brl } from "./pricing";
 import { fmtBR } from "./time";
@@ -6,7 +6,7 @@ import { fmtBR } from "./time";
 /** Só os dígitos; vazio se não parecer telefone. */
 export const phoneDigits = (v: string | null | undefined) => (v ?? "").replace(/\D/g, "");
 
-/** Número no formato do wa.me (DDI + DDD + número). Sem DDI assume Brasil (55). */
+/** Número no formato do WhatsApp (DDI + DDD + número). Sem DDI assume Brasil (55). */
 export function waNumber(phone: string | null | undefined): string {
   const d = phoneDigits(phone);
   if (d.length === 10 || d.length === 11) return "55" + d;
@@ -17,7 +17,9 @@ export function waNumber(phone: string | null | undefined): string {
 /** Sem número válido, abre o WhatsApp para o admin escolher o contato (a mensagem vai junto). */
 export function waLink(phone: string | null | undefined, text: string): string {
   const n = waNumber(phone);
-  return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
+  // api.whatsapp.com/send direto, e NÃO wa.me: o wa.me redireciona para cá e, nesse redirecionamento,
+  // emojis (caracteres de 4 bytes) chegam corrompidos como "�" no WhatsApp Web/Desktop.
+  return `https://api.whatsapp.com/send?${n ? `phone=${n}&` : ""}text=${encodeURIComponent(text)}`;
 }
 
 export type ChargeItem = { start_at: string; end_at: string; total_cents: number };
