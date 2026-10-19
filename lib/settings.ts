@@ -41,13 +41,19 @@ export async function getMaxUnpaid(): Promise<number | null> {
   const n = b.maxUnpaidReservations;
   return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
 }
-export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null) {
+/** Modelo da cobrança no WhatsApp; "" = usar o padrão do código (lib/whatsapp.ts). */
+export async function getChargeTemplate(): Promise<string> {
+  const r = await sql`select value from settings where key = 'charge_template'`;
+  const v = json(r[0]?.value); return typeof v === "string" ? v : "";
+}
+export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string) {
   // ausente = mantém o valor atual (quem chama sem o campo não desliga o bloqueio sem querer)
   const maxUnpaid = maxUnpaidReservations === undefined ? await getMaxUnpaid() : maxUnpaidReservations;
   await saveSetting("booking", { maximumReservationAdvanceDays, maxUnpaidReservations: maxUnpaid });
   await saveSetting("pricing", pricing);
   await saveSetting("garage_name", garageName);
   if (pix) await saveSetting("pix", pix);
+  if (chargeTemplate !== undefined) await saveSetting("charge_template", chargeTemplate.replace(/\r\n?/g, "\n").trim());
 }
 export async function settingsHistory() {
   return (await sql`select details, created_at from reservation_events where action = 'configuracao_alterada' order by id desc limit 10`).map((h) => ({ details: json(h.details), created_at: iso(h.created_at) }));

@@ -45,5 +45,7 @@ export const pixSchema = z.object({
 });
 export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pricingSchema, garageName: z.string().trim().min(1).max(60), maximumReservationAdvanceDays: z.number().int().min(1).max(60),
   // Bloqueia novas reservas do apartamento com MAIS de N pagamentos pendentes. null = desligado; ausente = não mexe.
-  maxUnpaidReservations: z.number().int().min(0).max(50).nullable().optional() });
+  maxUnpaidReservations: z.number().int().min(0).max(50).nullable().optional(),
+  // Modelo da mensagem de cobrança (WhatsApp). Vazio = volta ao padrão; ausente = não mexe.
+  chargeTemplate: z.string().max(1500).regex(/^[^\u0000-\u0008\u000b-\u001f]*$/, "Caracteres inválidos na mensagem.").optional() });
 export const isUuid = (v: string) => z.string().uuid().safeParse(v).success;
