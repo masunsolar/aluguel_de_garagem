@@ -6,9 +6,10 @@ import { RULES } from "../rules";
 import { effectiveStatus } from "../status";
 import { brtDay } from "../time";
 import { hashCode } from "../auth";
-import { ConflictError, UserError } from "../errors";
+import { ConflictError, ForbiddenError, UserError } from "../errors";
 import { calculatePrice, toDate, type PriceBreakdown } from "../pricing";
-import { getAdvanceDays, getPricing } from "../settings";
+import { getAdvanceDays, getMaxUnpaid, getPricing } from "../settings";
+import { unpaidUsedFor } from "./debts";
 import { reservationSchema } from "../validation";
 
 // Este módulo só devolve DTOs mínimos. Nada de nome, apto, carro, notas, motivo de bloqueio ou fotos.
@@ -29,15 +30,19 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
   if (brtDay(start) > brtDay(new Date(now + advance * DAY))) throw new UserError(`Só é possível reservar com até ${advance} dias de antecedência.`);
   if (+end - +start < RULES.minMinutes * 60_000) throw new UserError(`A reserva mínima é de ${RULES.minMinutes} minutos.`);
   if (+end - +start > RULES.maxDurationDays * DAY) throw new UserError(`A reserva máxima é de ${RULES.maxDurationDays} dias.`);
+  const maxUnpaid = await getMaxUnpaid(); // configurável no painel; null = desligado
+  if (maxUnpaid !== null && (await unpaidUsedFor(i.apartment)).length > maxUnpaid)
+    // Mensagem genérica: não diz quantas nem de quando (só o admin vê os detalhes)
+    throw new ForbiddenError("Não foi possível reservar: há pagamentos pendentes de reservas anteriores deste apartamento. Pague pelo PIX e envie o comprovante em “Minhas reservas”, ou fale com o responsável pela garagem.");
   const { totalCents, breakdown } = calculatePrice(start, end, await getPricing()); // preço SEMPRE calculado aqui; o do navegador é só prévia
   const code = randomBytes(9).toString("base64url"); // código secreto de acompanhamento (72 bits; só o hash é guardado)
   const details = JSON.stringify({ entrada: start.toISOString(), saida: end.toISOString(), totalCents });
   try {
     // reserva + evento de auditoria no MESMO comando: não existe reserva sem histórico
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, status, source, name, apartment, car_brand, car_model, car_color, plate, access_hash)
+      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, status, source, name, apartment, car_brand, car_model, car_color, plate, phone, access_hash)
         values (${start.toISOString()}, ${end.toISOString()}, ${totalCents}, ${JSON.stringify(breakdown)}::jsonb, 'confirmada', 'vizinho', ${i.name}, ${i.apartment},
-                ${i.carBrand}, ${i.carModel}, ${i.carColor}, ${i.plate}, ${hashCode(code)}) returning id)
+                ${i.carBrand}, ${i.carModel}, ${i.carColor}, ${i.plate}, ${i.phone || null}, ${hashCode(code)}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'vizinho', 'criada', ${details}::jsonb from r
       returning reservation_id as id`;
     return { id: r[0].id as string, shortId: String(r[0].id).slice(0, 8).toUpperCase(), code, start, end, totalCents, breakdown };

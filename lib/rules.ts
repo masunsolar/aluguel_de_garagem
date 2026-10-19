@@ -7,4 +7,5 @@ export const RULES = {
   maxPhotoBytes: 2_000_000,
   advanceDaysMax: 60,      // teto do que o painel pode configurar (o calendário mostra até isso)
   advanceDaysDefault: 14,  // padrão de maximumReservationAdvanceDays
+  maxUnpaidDefault: 1,     // padrão de maxUnpaidReservations (bloqueia com 2 ou mais pendências)
 } as const;

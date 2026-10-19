@@ -23,7 +23,7 @@ export default function Painel() {
     (view === "todas" || (view === "futuras" ? new Date(r.end_at).toISOString() >= now : new Date(r.end_at).toISOString() < now)) &&
     (!from || new Date(r.start_at).toISOString() >= new Date(from + "T00:00:00-03:00").toISOString()) &&
     (!to || new Date(r.start_at).toISOString() <= new Date(to + "T23:59:59-03:00").toISOString()) &&
-    (!q || [r.name, r.apartment, r.plate, r.car_model].join(" ").toLowerCase().includes(q.toLowerCase())));
+    (!q || [r.name, r.apartment, r.plate, r.car_model, r.phone].join(" ").toLowerCase().includes(q.toLowerCase())));
   const valid = list.filter((r) => ["pendente", "confirmada", "em_andamento", "finalizada", "irregular"].includes(r.status));
   const received = valid.filter((r) => r.payment_status === "pago").reduce((s, r) => s + r.total_cents, 0);
   const toReceive = valid.filter((r) => r.payment_status !== "pago").reduce((s, r) => s + r.total_cents, 0);

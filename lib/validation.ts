@@ -2,12 +2,17 @@ import { z } from "zod";
 const clean = (n: number, min = 1) => z.string().trim().min(min).max(n).regex(/^[^\u0000-\u001f<>]*$/, "Caracteres inválidos");
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+// Telefone opcional: aceita "(43) 99999-8888", "+55 43 99999-8888"... e guarda só os dígitos
+const phone = z.string().trim().max(25).regex(/^[0-9()+\-.\s]*$/, "Telefone inválido")
+  .transform((v) => v.replace(/\D/g, ""))
+  .refine((d) => d === "" || (d.length >= 10 && d.length <= 13), "Telefone inválido: use DDD + número.");
 const plate = z.string().trim().toUpperCase().regex(/^[A-Z]{3}-?\d[A-Z0-9]\d{2}$/, "Placa inválida");
 
 // ----- Área dos vizinhos -----
 export const reservationSchema = z.object({
   startDate: date, startTime: time, endDate: date, endTime: time,
   name: clean(80, 2), apartment: clean(20), carBrand: clean(40, 2), carModel: clean(40), carColor: clean(30, 2), plate,
+  phone: phone.optional(),
   website: z.string().max(200).optional(), // isca (honeypot): humanos não preenchem
 });
 
@@ -19,7 +24,7 @@ export const PAYMENT_STATUSES = ["pendente", "pago"] as const;
 export const adminCreateSchema = z.object({
   startAt: dt, endAt: dt, status: z.enum(STATUSES).default("confirmada"),
   name: txt(80), apartment: txt(20), carBrand: txt(40), carModel: txt(40), carColor: txt(30),
-  plate: plate.nullish().or(z.literal("")), notes: txt(1000),
+  plate: plate.nullish().or(z.literal("")), notes: txt(1000), phone: phone.nullish(),
   totalCents: z.number().int().min(0).max(10_000_000).nullish(),
   paymentStatus: z.enum(PAYMENT_STATUSES).optional(), // ausente na criação = pendente
 });
@@ -38,5 +43,7 @@ export const pixSchema = z.object({
   name: z.string().trim().max(25),
   city: z.string().trim().max(15),
 });
-export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pricingSchema, garageName: z.string().trim().min(1).max(60), maximumReservationAdvanceDays: z.number().int().min(1).max(60) });
+export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pricingSchema, garageName: z.string().trim().min(1).max(60), maximumReservationAdvanceDays: z.number().int().min(1).max(60),
+  // Bloqueia novas reservas do apartamento com MAIS de N pagamentos pendentes. null = desligado; ausente = não mexe.
+  maxUnpaidReservations: z.number().int().min(0).max(50).nullable().optional() });
 export const isUuid = (v: string) => z.string().uuid().safeParse(v).success;

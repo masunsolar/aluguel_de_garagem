@@ -132,7 +132,9 @@ await test("RESERVA PASSADA/EM ANDAMENTO não cancela; status é derivado do hor
   await db.query("update reservations set start_at=now()-interval '5 hours', end_at=now()-interval '3 hours' where id=$1", [idQ]);
   eq((await call("GET", "/api/minhas-reservas", { jar: P })).json[0].status, "em_andamento"); eq((await call("GET", "/api/minhas-reservas", { jar: Q })).json[0].status, "finalizada");
   eq((await call("DELETE", `/api/minhas-reservas/${idP}`, { jar: P })).status, 404); eq((await call("DELETE", `/api/minhas-reservas/${idQ}`, { jar: Q })).status, 404);
-  for (const [id, r] of [[idP, rp], [idQ, rq]]) { const row = await dbRow(id); eq(row.status, "confirmada"); eq(row.total_cents, r.totalCents); } });
+  for (const [id, r] of [[idP, rp], [idQ, rq]]) { const row = await dbRow(id); eq(row.status, "confirmada"); eq(row.total_cents, r.totalCents); }
+  // estas duas viraram reservas JÁ USADAS e não pagas do apto 101: quitar para não acionar o bloqueio por pendências nos testes seguintes
+  await db.query("update reservations set payment_status='pago', paid_at=now() where id = any($1)", [[idP, idQ]]); });
 
 // ================= SEGURANÇA ADMIN =================
 await test("/admin sem login redireciona; /admin/login abre", async () => {
@@ -293,6 +295,78 @@ await test("PIX copia e cola: CRC16 e campos corretos (vetor padrão CRC-16/CCIT
   const c = pixPayload({ key: "natan@example.com", name: "Natan Álvares", city: "São Paulo" }, 3000);
   assert.match(c, /^000201.*br\.gov\.bcb\.pix0117natan@example\.com.*5303986540530\.00.*5802BR5913NATAN ALVARES6009SAO PAULO.*6304[0-9A-F]{4}$/);
   eq(crc16(c.slice(0, -4)), c.slice(-4)); eq(pixPayload({ key: "x", name: "", city: "" }, 3000), null); });
+// ================= PENDÊNCIAS E COBRANÇA =================
+const past = (id, h) => db.query("update reservations set start_at=now()-make_interval(hours => $2), end_at=now()-make_interval(hours => $2 - 2) where id=$1", [id, h]);
+const mineIds = async (jar) => (await call("GET", "/api/minhas-reservas", { jar })).json.map((x) => x.id);
+const ap = (apartment, o = {}) => ({ ...o, extra: { ...(o.extra ?? {}), apartment } });
+let debtA, debtB;
+await test("PENDÊNCIAS: padrão = bloqueia com mais de 1; 2 reservas usadas e não pagas do apto 707 → 403 (\"Apto 707\" = \"707\"); outro apto passa", async () => {
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.maxUnpaidReservations, 1);
+  const J = {};
+  eq((await book(D(3), "01:00", D(3), "02:00", ap("707", { jar: J }))).status, 201);
+  [debtA] = await mineIds(J); await past(debtA, 30);
+  eq((await book(D(3), "03:00", D(3), "04:00", ap("707"))).status, 201); // 1 pendência: ainda pode
+  const second = (await db.query("select id from reservations where start_at=$1", [Z(D(3), "03:00")])).rows[0].id; debtB = second; await past(second, 50);
+  const r = await book(D(3), "05:00", D(3), "06:00", ap("Apto 707")); eq(r.status, 403); assert.match(r.json.error, /pagamentos pendentes/);
+  assert.ok(!/707|R\$/.test(r.json.error)); // não revela valores nem detalhes
+  eq((await book(D(3), "05:00", D(3), "06:00", ap("ap. 707"))).status, 403);
+  eq((await book(D(3), "05:00", D(3), "06:00", ap("708"))).status, 201); });
+await test("PENDÊNCIAS: reserva futura não conta; comprovante enviado tira da conta; pagar libera; cancelada não conta", async () => {
+  const J = {}; eq((await book(D(4), "01:00", D(4), "02:00", ap("709", { jar: J }))).status, 201); eq((await book(D(4), "03:00", D(4), "04:00", ap("709"))).status, 201);
+  eq((await book(D(4), "05:00", D(4), "06:00", ap("709"))).status, 201); // 3 futuras pendentes: nenhuma usada, nada bloqueia
+  eq((await book(D(4), "07:00", D(4), "08:00", ap("707"))).status, 403);
+  await db.query("insert into payment_receipts (reservation_id, mime, data) values ($1, 'image/jpeg', '\\xffd8')", [debtA]); // comprovante a conferir
+  eq((await book(D(4), "07:00", D(4), "08:00", ap("707"))).status, 201);
+  await db.query("delete from payment_receipts where reservation_id=$1", [debtA]); // volta a contar
+  eq((await book(D(4), "09:00", D(4), "10:00", ap("707"))).status, 403);
+  eq((await call("PATCH", `/api/admin/reservations/${debtA}`, { jar: ADM, body: { status: "cancelada" } })).status, 200); // cancelada não conta
+  eq((await book(D(4), "09:00", D(4), "10:00", ap("707"))).status, 201);
+  eq((await call("PATCH", `/api/admin/reservations/${debtA}`, { jar: ADM, body: { status: "finalizada" } })).status, 200);
+  eq((await call("PATCH", `/api/admin/reservations/${debtB}`, { jar: ADM, body: { paymentStatus: "pago" } })).status, 200);
+  eq((await book(D(4), "11:00", D(4), "12:00", ap("707"))).status, 201); });
+await test("PENDÊNCIAS configurável: 0 bloqueia com qualquer uma; vazio (null) desliga; PUT sem o campo mantém; -1 → 400; reserva manual do admin nunca é bloqueada", async () => {
+  eq((await book(D(5), "01:00", D(5), "02:00", ap("707"))).status, 201); // 707 tem 1 pendência (debtA) e o limite é 1: passa
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, maxUnpaidReservations: 0 }) })).status, 200);
+  eq((await book(D(5), "03:00", D(5), "04:00", ap("707"))).status, 403);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14 }) })).status, 200); // sem o campo: continua 0
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.maxUnpaidReservations, 0);
+  eq((await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(D(5), "03:00"), endAt: iso(D(5), "04:00"), apartment: "707", name: "Manual" } })).status, 201);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, maxUnpaidReservations: -1 }) })).status, 400);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, maxUnpaidReservations: null }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.maxUnpaidReservations, null);
+  eq((await book(D(5), "05:00", D(5), "06:00", ap("707"))).status, 201);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, maxUnpaidReservations: 1 }) })).status, 200);
+  assert.ok((await db.query("select 1 from reservation_events where action='configuracao_alterada' and details->>'chave'='booking'")).rowCount >= 1); });
+await test("WHATSAPP: opcional; guarda só dígitos; inválido → 400; só admin vê (não aparece em minhas-reservas nem na disponibilidade)", async () => {
+  eq((await book(D(6), "01:00", D(6), "02:00", { extra: { phone: "123" } })).status, 400);
+  eq((await book(D(6), "01:00", D(6), "02:00", { extra: { phone: "abc<script>" } })).status, 400);
+  const J = {}; eq((await book(D(6), "01:00", D(6), "02:00", { jar: J, extra: { phone: "(43) 99876-5432" } })).status, 201);
+  const [id] = await mineIds(J); eq((await dbRow(id)).phone, "43998765432"); eq((await detail(id)).phone, "43998765432");
+  assert.ok(!(await call("GET", "/api/minhas-reservas", { jar: J })).text.includes("998765432"));
+  assert.ok(!(await call("GET", "/api/availability")).text.includes("998765432"));
+  eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { phone: "+55 43 91234-5678" } })).status, 200); eq((await dbRow(id)).phone, "5543912345678");
+  eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { phone: "" } })).status, 200); eq((await dbRow(id)).phone, null); });
+await test("COBRANÇA: detalhe traz as pendências do apto (+ a própria, mesmo futura); registrar cobrança audita cada uma; só admin", async () => {
+  const d = await detail(debtB); // debtB já foi paga; debtA (usada, sem comprovante) é a pendência do 707
+  assert.ok(d.charge.some((c) => c.id === debtA)); assert.ok(!d.charge.some((c) => c.id === debtB)); for (const c of d.charge) assert.deepEqual(Object.keys(c).sort(), ["end_at", "id", "start_at", "total_cents"]);
+  const fut = (await db.query("select id from reservations where start_at=$1", [Z(D(5), "05:00")])).rows[0].id;
+  const f = await detail(fut); assert.ok(f.charge.some((c) => c.id === fut)); assert.ok(f.charge.some((c) => c.id === debtA));
+  const r = await call("POST", `/api/admin/reservations/${fut}/cobranca`, { jar: ADM }); eq(r.status, 200); eq(r.json.itens, f.charge.length);
+  for (const c of f.charge) eq((await db.query("select 1 from reservation_events where reservation_id=$1 and action='cobranca_aberta'", [c.id])).rowCount >= 1, true);
+  eq((await call("POST", `/api/admin/reservations/${fut}/cobranca`)).status, 401);
+  eq((await call("POST", `/api/admin/reservations/${crypto.randomUUID()}/cobranca`, { jar: ADM })).status, 404);
+  eq((await call("POST", `/api/admin/reservations/x/cobranca`, { jar: ADM })).status, 404);
+  eq((await call("PATCH", `/api/admin/reservations/${fut}`, { jar: ADM, body: { paymentStatus: "pago" } })).status, 200);
+  assert.ok(!(await detail(fut)).charge.some((c) => c.id === fut)); });
+await test("funções puras: apartamento normalizado e link do WhatsApp", async () => {
+  let A_, W; try { A_ = await import("../lib/apartment.ts"); W = await import("../lib/whatsapp.ts"); } catch { console.log("      (Node sem suporte a importar .ts: teste ignorado)"); return; }
+  for (const v of ["101", "Apto 101", "ap. 101", " AP 101 ", "apartamento 101"]) eq(A_.apartmentKey(v), "101");
+  eq(A_.apartmentKey("101-B"), "101b"); eq(A_.apartmentKey(""), "");
+  eq(W.waNumber("(43) 99876-5432"), "5543998765432"); eq(W.waNumber("+55 43 99876-5432"), "5543998765432"); eq(W.waNumber("123"), "");
+  assert.match(W.waLink("43998765432", "oi & tchau"), /^https:\/\/wa\.me\/5543998765432\?text=oi%20%26%20tchau$/);
+  assert.match(W.waLink("", "x"), /^https:\/\/wa\.me\/\?text=x$/);
+  const m = W.chargeMessage("Karina Waldrich", [{ start_at: Z(D(3), "01:00"), end_at: Z(D(3), "02:00"), total_cents: 1500 }, { start_at: Z(D(4), "01:00"), end_at: Z(D(4), "02:00"), total_cents: 3000 }], "pix@exemplo.com");
+  assert.match(m, /^Oi, Karina!/); assert.match(m, /Total: R\$\s45,00/); assert.match(m, /Chave PIX: pix@exemplo\.com/); });
 await test("LOGOUT revoga na hora: token copiado antes do logout deixa de funcionar (API e página)", async () => {
   const J = {}; await login(J); const copy = { adm: J.adm }; eq((await call("GET", "/api/admin/reservations", { jar: copy })).status, 200);
   eq((await call("DELETE", "/api/admin/login", { jar: J })).status, 200); eq(Object.keys(J).length, 0);

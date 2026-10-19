@@ -7,12 +7,13 @@ import { brl, calculatePrice } from "../pricing";
 import { getPricing } from "../settings";
 import { fmtBR } from "../time";
 import { adminCreateSchema, adminPatchSchema } from "../validation";
+import { unpaidUsedFor, type ChargeRow } from "./debts";
 
 const FIELDS = {
   startAt: ["start_at", "entrada"], endAt: ["end_at", "saída"], status: ["status", "status"], name: ["name", "responsável"],
   apartment: ["apartment", "apartamento"], carBrand: ["car_brand", "marca"], carModel: ["car_model", "modelo"],
   carColor: ["car_color", "cor"], plate: ["plate", "placa"], notes: ["notes", "observações"], totalCents: ["total_cents", "valor"],
-  paymentStatus: ["payment_status", "pagamento"],
+  paymentStatus: ["payment_status", "pagamento"], phone: ["phone", "telefone"],
 } as const;
 type Key = keyof typeof FIELDS;
 // Normaliza datas para ISO e remove o hash do código de acompanhamento
@@ -43,7 +44,13 @@ export async function getDetail(id: string) {
   const events = await sql`select actor, action, details, created_at from reservation_events where reservation_id = ${id} order by created_at, id`;
   const photos = await sql`select id from reservation_photos where reservation_id = ${id} order by created_at`;
   const receipts = await sql`select id, mime, created_at from payment_receipts where reservation_id = ${id} order by created_at`;
-  return { ...strip(r), events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
+  // Para o botão "Cobrar": pendências já usadas do mesmo apartamento + esta reserva (mesmo que futura), se estiver em aberto
+  const row = strip(r);
+  const charge: ChargeRow[] = row.status === "bloqueada" ? [] : await unpaidUsedFor(r.apartment);
+  if (row.payment_status === "pendente" && !["cancelada", "bloqueada"].includes(row.status) && row.total_cents > 0 && !charge.some((c) => c.id === id))
+    charge.push({ id, start_at: row.start_at, end_at: row.end_at, total_cents: row.total_cents });
+  charge.sort((a, b) => a.start_at.localeCompare(b.start_at));
+  return { ...row, charge, events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
     receipts: receipts.map((c) => ({ id: c.id as string, mime: c.mime as string, created_at: iso(c.created_at) })) };
 }
 
@@ -59,9 +66,9 @@ export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
   const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), pagamento: pay, motivo_ou_obs: i.notes ?? null });
   try {
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes)
+      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes, phone)
         values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${breakdown}::jsonb, ${pay}, ${pay === "pago" ? new Date().toISOString() : null}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
-                ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}) returning id)
+                ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}, ${i.phone || null}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
     return r[0].id as string;
@@ -105,7 +112,7 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
     const r = await sql`
       with u as (update reservations set start_at = ${s.toISOString()}, end_at = ${e.toISOString()}, status = ${next.status},
         total_cents = ${next.total_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
-        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes},
+        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, phone = ${next.phone},
         payment_status = ${next.payment_status}, paid_at = ${next.paid_at ? new Date(next.paid_at).toISOString() : null}, updated_at = now()
         where id = ${id} and deleted_at is null returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from u
@@ -149,4 +156,17 @@ export async function quote(startAt: string, endAt: string) {
 export async function getReceipt(id: string) {
   const [c] = await sql`select mime, encode(data, 'base64') as b64 from payment_receipts where id = ${id}`;
   return c ? { mime: c.mime as string, bytes: Buffer.from(c.b64, "base64") } : null;
+}
+
+/** Registra no histórico de CADA reserva cobrada que a cobrança foi aberta no WhatsApp. Os itens são recalculados aqui (não vêm do navegador). */
+export async function logCharge(id: string) {
+  const d = await getDetail(id);
+  if (!d) return null;
+  const items: ChargeRow[] = d.charge;
+  if (!items.length) return 0;
+  const details = JSON.stringify({ itens: items.length, total: brl(items.reduce((s, i) => s + i.total_cents, 0)), telefone: d.phone ?? null });
+  const r = await sql`insert into reservation_events (reservation_id, actor, action, details)
+    select x::uuid, 'admin', 'cobranca_aberta', ${details}::jsonb from unnest(string_to_array(${items.map((i) => i.id).join(",")}, ',')) as x
+    returning reservation_id`;
+  return r.length;
 }
