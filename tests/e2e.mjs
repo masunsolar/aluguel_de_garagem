@@ -376,8 +376,9 @@ await test("funções puras: apartamento normalizado e link do WhatsApp", async 
   for (const v of ["101", "Apto 101", "ap. 101", " AP 101 ", "apartamento 101"]) eq(A_.apartmentKey(v), "101");
   eq(A_.apartmentKey("101-B"), "101b"); eq(A_.apartmentKey(""), "");
   eq(W.waNumber("(43) 99876-5432"), "5543998765432"); eq(W.waNumber("+55 43 99876-5432"), "5543998765432"); eq(W.waNumber("123"), "");
-  assert.match(W.waLink("43998765432", "oi & tchau"), /^https:\/\/wa\.me\/5543998765432\?text=oi%20%26%20tchau$/);
-  assert.match(W.waLink("", "x"), /^https:\/\/wa\.me\/\?text=x$/);
+  assert.match(W.waLink("43998765432", "oi & tchau"), /^https:\/\/api\.whatsapp\.com\/send\?phone=5543998765432&text=oi%20%26%20tchau$/);
+  eq(W.waLink("", "😀✅"), "https://api.whatsapp.com/send?text=%F0%9F%98%80%E2%9C%85"); // emoji em UTF-8
+  assert.match(W.waLink("", "x"), /^https:\/\/api\.whatsapp\.com\/send\?text=x$/);
   const m = W.chargeMessage("Karina Waldrich", [{ start_at: Z(D(3), "01:00"), end_at: Z(D(3), "02:00"), total_cents: 1500 }, { start_at: Z(D(4), "01:00"), end_at: Z(D(4), "02:00"), total_cents: 3000 }], "pix@exemplo.com");
   assert.match(m, /^Oi, Karina!/); assert.match(m, /Total: R\$\s45,00/); assert.match(m, /Chave PIX: pix@exemplo\.com/); });
 await test("LOGOUT revoga na hora: token copiado antes do logout deixa de funcionar (API e página)", async () => {
