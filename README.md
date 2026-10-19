@@ -117,3 +117,8 @@ Alterações ficam no histórico de configurações.
 - **WhatsApp** (opcional): o vizinho pode informar no formulário; você edita no painel. Guardado só com dígitos e visível só para o admin.
 - **Cobrar no WhatsApp** (editor, pagamento pendente): abre `wa.me` com a mensagem pronta listando todas as reservas em aberto do apartamento (as já usadas + a atual), o total e a chave PIX. Sem telefone válido, o WhatsApp abre para você escolher o contato. Cada reserva cobrada registra "Cobrança aberta no WhatsApp" no histórico.
 - **Atualização de um banco existente:** rode `npm run db:init` antes de publicar esta versão (adiciona a coluna `phone`; não apaga nada).
+
+## Lembrar meus dados
+- O formulário de reserva guarda nome, apartamento, WhatsApp e o **último veículo** usado no próprio aparelho (`localStorage`, `lib/profile.ts`) e preenche tudo na próxima vez. O vizinho pode alterar qualquer campo.
+- Os dados só são salvos depois de uma reserva concluída. Desmarcar "Lembrar meus dados" apaga o que estava salvo; "Não sou eu" limpa o formulário e o aparelho (útil em celular emprestado).
+- Nada novo vai para o servidor. Em aba anônima ou com armazenamento bloqueado, o formulário só não lembra.

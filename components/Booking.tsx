@@ -1,4 +1,5 @@
 "use client";
+import { clearProfile, loadProfile, saveProfile } from "@/lib/profile";
 import { useEffect, useMemo, useState } from "react";
 import MyReservations from "./MyReservations";
 import PixBox from "./PixBox";
@@ -89,7 +90,10 @@ export default function Booking() {
 }
 
 function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
-  const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", website: "" });
+  const EMPTY = { name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "" };
+  const [saved] = useState(loadProfile); // o formulário só abre no navegador (após o clique), então dá para ler aqui
+  const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
+  const [remember, setRemember] = useState(true); const [prefilled, setPrefilled] = useState(!!saved);
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
 
@@ -101,7 +105,10 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
     try {
       const r = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(f) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) onDone(j); else setErr(j.error ?? "Não foi possível reservar. Tente novamente.");
+      if (r.ok) {
+        if (remember) saveProfile(f); else clearProfile(); // lembra o último veículo usado
+        onDone(j);
+      } else setErr(j.error ?? "Não foi possível reservar. Tente novamente.");
     } catch { setErr("Sem conexão com o servidor. Verifique sua internet e tente de novo."); }
     setLoading(false);
   }
@@ -119,6 +126,12 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
             <label>Hora<input className={field} type="time" value={f.endTime} onChange={set("endTime")} required /></label>
           </div>
           <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
+          {prefilled && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-livre/10 p-3 text-sm">
+              <span className="mr-auto">Preenchido com os dados da sua última reserva. Confira e altere se precisar.</span>
+              <button type="button" onClick={() => { clearProfile(); setF({ ...f, ...EMPTY }); setPrefilled(false); }} className="underline">Não sou eu</button>
+            </div>
+          )}
           <label className="block">Nome do responsável<input className={field} value={f.name} onChange={set("name")} required /></label>
           <div className="grid grid-cols-2 gap-3">
             <label>Apartamento<input className={field} value={f.apartment} onChange={set("apartment")} required /></label>
@@ -128,6 +141,7 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
             <label>Cor<input className={field} value={f.carColor} onChange={set("carColor")} required /></label>
             <label>WhatsApp <span className="text-asfalto/60">(opcional)</span><input className={field} type="tel" inputMode="tel" autoComplete="tel" maxLength={25} value={f.phone} onChange={set("phone")} placeholder="(43) 99999-8888" /></label>
           </div>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Lembrar meus dados e o veículo neste aparelho</label>
           <div className="rounded-xl bg-concreto p-4">
             {quote ? <>
               <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
