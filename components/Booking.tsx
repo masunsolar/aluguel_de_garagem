@@ -4,14 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import MyReservations from "./MyReservations";
 import PixBox from "./PixBox";
 import PriceBreakdown from "./PriceBreakdown";
+import DayBar from "./DayBar";
 import type { PixConfig } from "@/lib/pix";
 import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
-import { brtDay } from "@/lib/time";
-import { DEFAULT_TIME_STEP, preset, timeOptions } from "@/lib/timeslots";
+import { brtDay, fmtBR } from "@/lib/time";
+import { DEFAULT_TIME_STEP, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
 
 type Busy = { start: string; end: string };
 const iso = brtDay;
 const hm = (s: string) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+// "23/10 08:00 até 12:00" (mesmo dia) ou "23/10 19:00 até 24/10 10:00"
+const span = (a: string, b: string) => { const x = fmtBR(a), y = fmtBR(b); return x.slice(0, 10) === y.slice(0, 10) ? `${x.slice(0, 5)} ${x.slice(-5)} até ${y.slice(-5)}` : `${x.slice(0, 5)} ${x.slice(-5)} até ${y.slice(0, 5)} ${y.slice(-5)}`; };
 const field = "w-full rounded-lg border border-asfalto/20 bg-white px-3 py-2.5";
 
 export default function Booking() {
@@ -71,6 +74,7 @@ export default function Booking() {
       </div>
 
       <section className="mt-4 rounded-2xl bg-white p-5 shadow-sm" aria-live="polite">
+        {busy !== null && !loadErr && <DayBar day={day} busy={dayBusy} />}
         {loadErr ? <div role="alert" className="text-ocupado">Não foi possível carregar a disponibilidade. <button onClick={() => { setLoadErr(false); load(); }} className="underline">Tentar de novo</button></div> : busy === null ? <p className="animate-pulse text-asfalto/60">Carregando disponibilidade…</p> : dayBusy.length === 0 ? (
           <p><span className="mr-2 inline-block h-3 w-3 rounded-full bg-livre" />Disponível o dia todo</p>
         ) : (
@@ -85,13 +89,13 @@ export default function Booking() {
 
       <p className="mt-4 text-sm text-asfalto/70">🕥 Check-out até <b>{pricing.checkoutTime}</b>: quem pernoita e sai até esse horário não paga a manhã.</p>
       <button onClick={() => setOpen(true)} className="mt-3 w-full rounded-xl bg-faixa px-4 py-3.5 text-lg font-semibold text-asfalto shadow-sm">+ Fazer reserva</button>
-      {open && <Form day={day} pricing={pricing} step={step} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
+      {open && <Form day={day} pricing={pricing} step={step} busy={busy ?? []} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
       <MyReservations key={ver} />
     </>
   );
 }
 
-function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; step: number; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
+function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; step: number; busy: Busy[]; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
   const EMPTY = { name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "" };
   const [saved] = useState(loadProfile); // o formulário só abre no navegador (após o clique), então dá para ler aqui
   const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
@@ -103,7 +107,8 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
   const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
 
   // atalhos com os horários configurados no painel (preço calculado pela mesma regra do servidor)
-  const presets = (["dia", "pernoite"] as const).map((k) => {
+  const kinds: PresetKind[] = isFriday(f.startDate) ? ["dia", "pernoite", "fimdesemana"] : ["dia", "pernoite"];
+  const presets = kinds.map((k) => {
     const p = preset(k, f.startDate, pricing, step);
     let cents: number | null = null;
     try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing).totalCents; } catch {}
@@ -112,6 +117,9 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
 
   let quote: ReturnType<typeof calculatePrice> | null = null;
   try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing); } catch {}
+  // Conflito com reservas já existentes (intervalo [): sair 21:00 e outro entrar 21:00 pode). O servidor confere de novo.
+  const s0 = +toDate(f.startDate, f.startTime), e0 = +toDate(f.endDate, f.endTime);
+  const clashes = quote ? busy.filter((b) => +new Date(b.start) < e0 && +new Date(b.end) > s0) : [];
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(""); setLoading(true);
@@ -138,12 +146,12 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
             <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className={`grid gap-3 ${presets.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
             {presets.map(({ k, p, cents }) => (
               <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
                 className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
-                <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : "🌙 Pernoite"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
+                <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : k === "pernoite" ? "🌙 Pernoite" : "📅 Fim de semana"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
+                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
                 {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
               </button>
             ))}
@@ -165,6 +173,13 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
             <label>WhatsApp <span className="text-asfalto/60">(opcional)</span><input className={field} type="tel" inputMode="tel" autoComplete="tel" maxLength={25} value={f.phone} onChange={set("phone")} placeholder="(43) 99999-8888" /></label>
           </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Lembrar meus dados e o veículo neste aparelho</label>
+          {clashes.length > 0 && (
+            <div role="alert" className="rounded-xl bg-ocupado/10 p-3 text-sm text-ocupado">
+              <b>Esse horário bate com outra reserva:</b>
+              <ul className="mt-1 list-disc pl-5">{clashes.map((b, i) => <li key={i}>{span(b.start, b.end)}</li>)}</ul>
+              Escolha outro horário. Dá para entrar no exato horário em que a outra reserva termina.
+            </div>
+          )}
           <div className="rounded-xl bg-concreto p-4">
             {quote ? <>
               <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
@@ -177,7 +192,7 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
         {err && <p role="alert" className="mx-5 mb-2 max-h-32 shrink-0 overflow-y-auto rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
         <div className="flex shrink-0 gap-3 border-t border-asfalto/10 bg-white px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-asfalto/20 px-4 py-3">Cancelar</button>
-          <button disabled={loading || !quote} className="flex-1 rounded-lg bg-asfalto px-4 py-3 font-semibold text-white disabled:opacity-50">{loading ? "Reservando…" : "Confirmar reserva"}</button>
+          <button disabled={loading || !quote || clashes.length > 0} className="flex-1 rounded-lg bg-asfalto px-4 py-3 font-semibold text-white disabled:opacity-50">{loading ? "Reservando…" : "Confirmar reserva"}</button>
         </div>
       </form>
     </div>

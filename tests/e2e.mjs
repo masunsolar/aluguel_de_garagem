@@ -389,6 +389,7 @@ await test("quem não está logado não consegue deslogar o admin (DELETE /login
   const J = {}; await login(J); eq((await call("DELETE", "/api/admin/login")).status, 200); eq((await call("GET", "/api/admin/reservations", { jar: J })).status, 200); });
 
 await test("passo do seletor de horário (5/10/30 min): padrão 30, configurável, ausente = não mexe", async () => {
+  await login(ADM); // os testes de logout acima revogam a sessão
   eq((await call("GET", "/api/config")).json.timeStepMinutes, 30);
   eq((await call("PUT", "/api/admin/settings", { body: cfg({ timeStepMinutes: 5 }) })).status, 401);
   for (const n of [0, 7, 15, 60, "5"]) eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: n }) })).status, 400, String(n));
@@ -397,6 +398,7 @@ await test("passo do seletor de horário (5/10/30 min): padrão 30, configuráve
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.timeStepMinutes, 10); // sem o campo: continua 10
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: 30 }) })).status, 200); });
 await test("PACOTES: diária R$40, fim de semana e semana; sempre a combinação mais barata; null desliga", async () => {
+  await login(ADM);
   const pk = (o = {}) => cfg({ pricing: { dayPrice: 30, nightPrice: 15, dayStartHour: 9, nightStartHour: 18, checkoutTime: "10:00", fullDayPrice: 40, weekendPrice: 100, weekPrice: 260, ...o } });
   const quote = async (a, b) => (await call("POST", "/api/admin/quote", { jar: ADM, body: { startAt: a, endAt: b } })).json;
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pk() })).status, 200);
@@ -413,4 +415,24 @@ await test("PACOTES: diária R$40, fim de semana e semana; sempre a combinação
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pk({ fullDayPrice: -1 }) })).status, 400);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); // sem os campos = pacotes desligados
   eq((await quote(Z("2027-03-03", "09:00"), Z("2027-03-04", "10:00"))).totalCents, 4500); });
+await test("CUSTO MENSAL: padrão 200; admin altera (auditado); ausente = não mexe; negativo → 400", async () => {
+  await login(ADM);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.monthlyCost, 200);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ monthlyCost: 210.5 }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.monthlyCost, 210.5);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.monthlyCost, 210.5);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ monthlyCost: -1 }) })).status, 400);
+  assert.ok((await db.query("select 1 from reservation_events where action='configuracao_alterada' and details->>'chave'='finance'")).rowCount >= 1);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ monthlyCost: 200 }) })).status, 200); });
+await test("BACKUP: só admin; JSON sem hash do código nem admin_epoch; CSV com ; e fórmula neutralizada", async () => {
+  await login(ADM);
+  eq((await call("GET", "/api/admin/export")).status, 401); eq((await call("GET", "/api/admin/export?format=csv")).status, 401);
+  const r = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: Z(D(9), "03:00"), endAt: Z(D(9), "04:00"), status: "confirmada", name: "=HIPERLINK(\"x\")", apartment: "12" } });
+  eq(r.status, 201, r.text);
+  const j = await call("GET", "/api/admin/export", { jar: ADM }); eq(j.status, 200);
+  assert.match(j.headers.get("content-disposition") ?? "", /attachment; filename="garagem-backup-/);
+  assert.ok(j.json.reservations.length >= 1 && Array.isArray(j.json.events)); assert.ok(!("access_hash" in j.json.reservations[0]));
+  assert.ok(!("admin_epoch" in j.json.settings) && "pricing" in j.json.settings);
+  const c = await call("GET", "/api/admin/export?format=csv", { jar: ADM }); eq(c.status, 200);
+  assert.match(c.headers.get("content-type") ?? "", /text\/csv/); assert.ok(c.text.includes(`"'=HIPERLINK(""x"")"`)); assert.ok(c.text.split("\r\n")[0].includes(";")); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);
