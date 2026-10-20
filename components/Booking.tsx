@@ -7,7 +7,7 @@ import PriceBreakdown from "./PriceBreakdown";
 import type { PixConfig } from "@/lib/pix";
 import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 import { brtDay } from "@/lib/time";
-import { DEFAULT_TIME_STEP, fullDay, timeOptions } from "@/lib/timeslots";
+import { DEFAULT_TIME_STEP, preset, timeOptions } from "@/lib/timeslots";
 
 type Busy = { start: string; end: string };
 const iso = brtDay;
@@ -102,7 +102,13 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
   // horários de N em N minutos; o check-out e os valores já escolhidos sempre aparecem na lista
   const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
 
-  const fd = fullDay(f.startDate, pricing.dayStartHour, pricing.checkoutTime, step); // botão "Dia todo"
+  // atalhos com os horários configurados no painel (preço calculado pela mesma regra do servidor)
+  const presets = (["dia", "pernoite"] as const).map((k) => {
+    const p = preset(k, f.startDate, pricing, step);
+    let cents: number | null = null;
+    try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing).totalCents; } catch {}
+    return { k, p, cents };
+  });
 
   let quote: ReturnType<typeof calculatePrice> | null = null;
   try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing); } catch {}
@@ -132,10 +138,16 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
             <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
-          <button type="button" onClick={() => { setErr(""); setF({ ...f, ...fd }); }}
-            className="w-full rounded-lg border border-asfalto/20 px-3 py-2.5 text-sm">
-            ☀️🌙 Dia todo: {fd.startTime} até {fd.endTime} do dia seguinte
-          </button>
+          <div className="grid grid-cols-2 gap-3">
+            {presets.map(({ k, p, cents }) => (
+              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
+                className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
+                <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : "🌙 Pernoite"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
+                <div className="text-asfalto/70">{p ? (k === "dia" ? `${p.startTime} às ${p.endTime}` : `${p.startTime} até ${p.endTime} do dia seguinte`) : "Já passou hoje"}</div>
+                {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
+              </button>
+            ))}
+          </div>
           <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
           {prefilled && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-livre/10 p-3 text-sm">
