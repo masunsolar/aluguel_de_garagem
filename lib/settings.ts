@@ -3,6 +3,7 @@ import { iso, json, sql } from "./db";
 import { RULES } from "./rules";
 import { withDefaults, type PricingConfig } from "./pricing";
 import { EMPTY_PIX, type PixConfig } from "./pix";
+import { DEFAULT_TIME_STEP, isTimeStep, type TimeStep } from "./timeslots";
 
 export async function getPricing(): Promise<PricingConfig> {
   const r = await sql`select value from settings where key = 'pricing'`;
@@ -28,7 +29,7 @@ export async function getPix(): Promise<PixConfig> {
 }
 async function getBooking() {
   const r = await sql`select value from settings where key = 'booking'`;
-  return (json(r[0]?.value) ?? {}) as { maximumReservationAdvanceDays?: unknown; maxUnpaidReservations?: unknown };
+  return (json(r[0]?.value) ?? {}) as { maximumReservationAdvanceDays?: unknown; maxUnpaidReservations?: unknown; timeStepMinutes?: unknown };
 }
 export async function getAdvanceDays(): Promise<number> {
   const n = Number((await getBooking()).maximumReservationAdvanceDays);
@@ -41,15 +42,21 @@ export async function getMaxUnpaid(): Promise<number | null> {
   const n = b.maxUnpaidReservations;
   return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
 }
+/** De quantos em quantos minutos o vizinho escolhe o horário (5, 10 ou 30). Config antiga = padrão. */
+export async function getTimeStep(): Promise<TimeStep> {
+  const n = (await getBooking()).timeStepMinutes;
+  return isTimeStep(n) ? n : DEFAULT_TIME_STEP;
+}
 /** Modelo da cobrança no WhatsApp; "" = usar o padrão do código (lib/whatsapp.ts). */
 export async function getChargeTemplate(): Promise<string> {
   const r = await sql`select value from settings where key = 'charge_template'`;
   const v = json(r[0]?.value); return typeof v === "string" ? v : "";
 }
-export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string) {
+export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string, timeStepMinutes?: TimeStep) {
   // ausente = mantém o valor atual (quem chama sem o campo não desliga o bloqueio sem querer)
   const maxUnpaid = maxUnpaidReservations === undefined ? await getMaxUnpaid() : maxUnpaidReservations;
-  await saveSetting("booking", { maximumReservationAdvanceDays, maxUnpaidReservations: maxUnpaid });
+  const timeStep = timeStepMinutes ?? await getTimeStep();
+  await saveSetting("booking", { maximumReservationAdvanceDays, maxUnpaidReservations: maxUnpaid, timeStepMinutes: timeStep });
   await saveSetting("pricing", pricing);
   await saveSetting("garage_name", garageName);
   if (pix) await saveSetting("pix", pix);

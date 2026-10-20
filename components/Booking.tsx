@@ -7,6 +7,7 @@ import PriceBreakdown from "./PriceBreakdown";
 import type { PixConfig } from "@/lib/pix";
 import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 import { brtDay } from "@/lib/time";
+import { DEFAULT_TIME_STEP, fullDay, timeOptions } from "@/lib/timeslots";
 
 type Busy = { start: string; end: string };
 const iso = brtDay;
@@ -18,6 +19,7 @@ export default function Booking() {
   const [busy, setBusy] = useState<Busy[] | null>(null);
   const [pricing, setPricing] = useState<PricingConfig>(DEFAULT_PRICING);
   const [pix, setPix] = useState<PixConfig | null>(null);
+  const [step, setStep] = useState<number>(DEFAULT_TIME_STEP); // de quantos em quantos minutos (vem do servidor)
   const [advance, setAdvance] = useState(14); // maximumReservationAdvanceDays (vem do servidor)
   const [loadErr, setLoadErr] = useState(false);
   const [day, setDay] = useState(today);
@@ -28,7 +30,7 @@ export default function Booking() {
   const load = () => fetch("/api/availability").then((r) => (r.ok ? r.json() : Promise.reject())).then((b) => { setBusy(b); setLoadErr(false); }).catch(() => setLoadErr(true));
   useEffect(() => {
     load();
-    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(withDefaults(c.pricing)); setAdvance(c.maximumReservationAdvanceDays); setPix(c.pix ?? null); }).catch(() => {});
+    fetch("/api/config").then((r) => r.json()).then((c) => { setPricing(withDefaults(c.pricing)); setAdvance(c.maximumReservationAdvanceDays); setPix(c.pix ?? null); if (c.timeStepMinutes) setStep(c.timeStepMinutes); }).catch(() => {});
   }, []);
 
   const days = useMemo(() => Array.from({ length: advance + 1 }, (_, i) => iso(new Date(Date.now() + i * 86400000))), [advance]);
@@ -83,19 +85,24 @@ export default function Booking() {
 
       <p className="mt-4 text-sm text-asfalto/70">🕥 Check-out até <b>{pricing.checkoutTime}</b>: quem pernoita e sai até esse horário não paga a manhã.</p>
       <button onClick={() => setOpen(true)} className="mt-3 w-full rounded-xl bg-faixa px-4 py-3.5 text-lg font-semibold text-asfalto shadow-sm">+ Fazer reserva</button>
-      {open && <Form day={day} pricing={pricing} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
+      {open && <Form day={day} pricing={pricing} step={step} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
       <MyReservations key={ver} />
     </>
   );
 }
 
-function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
+function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; pricing: PricingConfig; step: number; maxDate: string; onClose: () => void; onDone: (r: any) => void }) {
   const EMPTY = { name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "" };
   const [saved] = useState(loadProfile); // o formulário só abre no navegador (após o clique), então dá para ler aqui
   const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
   const [remember, setRemember] = useState(true); const [prefilled, setPrefilled] = useState(!!saved);
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
+
+  // horários de N em N minutos; o check-out e os valores já escolhidos sempre aparecem na lista
+  const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
+
+  const fd = fullDay(f.startDate, pricing.dayStartHour, pricing.checkoutTime, step); // botão "Dia todo"
 
   let quote: ReturnType<typeof calculatePrice> | null = null;
   try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing); } catch {}
@@ -121,10 +128,14 @@ function Form({ day, pricing, maxDate, onClose, onDone }: { day: string; pricing
           <h2 className="text-xl font-bold">Nova reserva</h2>
           <div className="grid grid-cols-2 gap-3">
             <label>Entrada<input className={field} type="date" min={brtDay(new Date())} max={maxDate} value={f.startDate} onChange={set("startDate")} required /></label>
-            <label>Hora<input className={field} type="time" value={f.startTime} onChange={set("startTime")} required /></label>
+            <label>Hora<select className={field} value={f.startTime} onChange={set("startTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
-            <label>Hora<input className={field} type="time" value={f.endTime} onChange={set("endTime")} required /></label>
+            <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
+          <button type="button" onClick={() => { setErr(""); setF({ ...f, ...fd }); }}
+            className="w-full rounded-lg border border-asfalto/20 px-3 py-2.5 text-sm">
+            ☀️🌙 Dia todo: {fd.startTime} até {fd.endTime} do dia seguinte
+          </button>
           <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
           {prefilled && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-livre/10 p-3 text-sm">

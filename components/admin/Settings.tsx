@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, fmtDT } from "@/lib/client";
+import { TIME_STEPS } from "@/lib/timeslots";
 import { CHARGE_PLACEHOLDERS, DEFAULT_CHARGE_TEMPLATE, chargeMessage } from "@/lib/whatsapp";
 
 // Exemplo só para a prévia da mensagem (não é gravado)
@@ -23,6 +24,9 @@ export default function Settings() {
     <form onSubmit={save} className="flex flex-wrap items-end gap-3 rounded-2xl bg-white p-4">
       <label>Antecedência máx. (dias)<input type="number" min={1} max={60} className={input} value={s.maximumReservationAdvanceDays} onChange={(e) => setS({ ...s, maximumReservationAdvanceDays: Number(e.target.value) })} /></label>
       <label>Bloquear com mais de (pendências)<input type="number" min={0} max={50} className={input} value={s.maxUnpaidReservations ?? ""} placeholder="desligado" onChange={(e) => setS({ ...s, maxUnpaidReservations: e.target.value === "" ? null : Number(e.target.value) })} /></label>
+      <label>Horários de quantos em quantos min<select className={input} value={s.timeStepMinutes ?? 30} onChange={(e) => setS({ ...s, timeStepMinutes: Number(e.target.value) })}>
+        {TIME_STEPS.map((n) => <option key={n} value={n}>{n} min</option>)}
+      </select></label>
       <p className="w-full text-xs text-asfalto/60">O apartamento com mais pendências que isso não consegue fazer novas reservas. Contam só reservas já usadas, não pagas e sem comprovante enviado. 1 = bloqueia a partir da 2ª; 0 = bloqueia com qualquer pendência; vazio = desligado. Reservas manuais suas não são bloqueadas.</p>
       <label className="w-full">Nome da garagem<input className="mt-1 block w-full max-w-sm rounded-lg border border-asfalto/20 px-3 py-2" value={s.garageName} onChange={(e) => setS({ ...s, garageName: e.target.value })} /></label>
       {([["dayPrice", "Dia (R$)"], ["nightPrice", "Noite (R$)"], ["dayStartHour", "Dia começa (h)"], ["nightStartHour", "Noite começa (h)"]] as const).map(([k, l]) => (
@@ -58,7 +62,7 @@ export default function Settings() {
       </fieldset>
       <button className="rounded-lg bg-asfalto px-4 py-2.5 text-white">Salvar</button>
       {msg && <span role="status">{msg}</span>}
-      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "reservas", charge_template: "mensagem de cobrança" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
+      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "reservas/horários", charge_template: "mensagem de cobrança" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
     </form>
   );
 }
