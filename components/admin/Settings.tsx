@@ -32,6 +32,16 @@ export default function Settings() {
       {([["dayPrice", "Dia (R$)"], ["nightPrice", "Noite (R$)"], ["dayStartHour", "Dia começa (h)"], ["nightStartHour", "Noite começa (h)"]] as const).map(([k, l]) => (
         <label key={k}>{l}<input type="number" step="0.01" className={input} value={s.pricing[k]} onChange={num(k)} /></label>
       ))}
+      <fieldset className="w-full rounded-lg border border-asfalto/15 p-3">
+        <legend className="px-1 text-sm">Pacotes com desconto (vazio = desligado)</legend>
+        <div className="flex flex-wrap gap-3">
+          {([["fullDayPrice", "Diária completa (R$)"], ["weekendPrice", "Fim de semana (R$)"], ["weekPrice", "Semana (R$)"]] as const).map(([k, l]) => (
+            <label key={k}>{l}<input type="number" step="0.01" min={0} className={input} value={s.pricing[k] ?? ""} placeholder="desligado"
+              onChange={(e) => setS({ ...s, pricing: { ...s.pricing, [k]: e.target.value === "" ? null : Number(e.target.value) } })} /></label>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-asfalto/60">Diária = um dia + a noite seguinte até o check-out. Fim de semana = da noite de sexta até o check-out de segunda. Semana = 7 dias corridos. O sistema sempre cobra a combinação mais barata (avulsos ou pacotes), então um pacote mais caro que a soma das diárias nunca é usado.</p>
+      </fieldset>
       <label>Check-out até<input type="time" className={input} value={s.pricing.checkoutTime ?? "10:30"} onChange={(e) => setS({ ...s, pricing: { ...s.pricing, checkoutTime: e.target.value } })} /></label>
       <p className="w-full text-xs text-asfalto/60">Quem pernoita e sai até o check-out não paga a manhã. O dia continua começando no horário acima. Para desligar, use o mesmo horário do início do dia.</p>
       <fieldset className="w-full rounded-lg border border-asfalto/15 p-3">

@@ -1,4 +1,5 @@
-import { brl, summarize, type PriceBreakdown as Breakdown } from "@/lib/pricing";
+import { Fragment } from "react";
+import { PACKAGE_LABEL, brl, summarize, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 
 // start/end chegam como horário de Brasília "YYYY-MM-DDTHH:mm": formata sem passar por Date (sem risco de fuso)
 const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
@@ -16,13 +17,25 @@ export default function PriceBreakdown({ breakdown, chargedCents, className = ""
       <div className="font-semibold">Contabilizado: {summarize(days, nights)}</div>
       <table className="mt-1 w-full">
         <tbody>
-          {breakdown.periods.map((p, i) => (
-            <tr key={i} className={`border-b border-asfalto/10 ${p.waived ? "text-asfalto/50" : ""}`}>
-              <td className="py-1 pr-2">{p.kind === "dia" ? "Dia" : "Noite"}</td>
-              <td className="py-1 pr-2">{range(p.start, p.end)}</td>
-              <td className="py-1 text-right whitespace-nowrap">{p.waived ? <span title={`Saída até ${breakdown.checkoutTime}`}>grátis*</span> : brl(p.cents)}</td>
-            </tr>
-          ))}
+          {breakdown.periods.map((p, i) => {
+            const pk = p.pkg !== undefined ? breakdown.packages?.[p.pkg] : undefined;
+            const first = pk && breakdown.periods.findIndex((x) => x.pkg === p.pkg) === i;
+            return (
+              <Fragment key={i}>
+                {pk && first && (
+                  <tr className="border-b border-asfalto/10 font-medium">
+                    <td className="pt-1.5 pr-2" colSpan={2}>{PACKAGE_LABEL[pk.kind]} <span className="font-normal text-livre">· economia de {brl(pk.fullCents - pk.cents)}</span></td>
+                    <td className="pt-1.5 text-right whitespace-nowrap">{brl(pk.cents)}</td>
+                  </tr>
+                )}
+                <tr className={`border-b border-asfalto/10 ${p.waived || pk ? "text-asfalto/50" : ""}`}>
+                  <td className={`py-1 pr-2 ${pk ? "pl-3" : ""}`}>{p.kind === "dia" ? "Dia" : "Noite"}</td>
+                  <td className="py-1 pr-2">{range(p.start, p.end)}</td>
+                  <td className="py-1 text-right whitespace-nowrap">{p.waived ? <span title={`Saída até ${breakdown.checkoutTime}`}>grátis*</span> : pk ? "incluído" : brl(p.cents)}</td>
+                </tr>
+              </Fragment>
+            );
+          })}
           <tr className="font-semibold"><td className="pt-1" colSpan={2}>Total</td><td className="pt-1 text-right">{brl(breakdown.totalCents)}</td></tr>
         </tbody>
       </table>

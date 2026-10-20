@@ -143,7 +143,7 @@ function Form({ day, pricing, step, maxDate, onClose, onDone }: { day: string; p
               <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
                 className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
                 <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : "🌙 Pernoite"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? (k === "dia" ? `${p.startTime} às ${p.endTime}` : `${p.startTime} até ${p.endTime} do dia seguinte`) : "Já passou hoje"}</div>
+                <div className="text-asfalto/70">{p ? `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
                 {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
               </button>
             ))}

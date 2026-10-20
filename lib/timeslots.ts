@@ -36,7 +36,7 @@ const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_40
 
 /**
  * Botões de atalho, sempre com os horários configurados no painel:
- *  - "dia":      início do dia (dayStartHour) até o início da noite (nightStartHour) da mesma data → 1 dia
+ *  - "dia":      início do dia (dayStartHour) até o check-out do dia seguinte → diária completa (dia + noite)
  *  - "pernoite": início da noite até o check-out do dia seguinte → 1 noite (a manhã é isenta pela tolerância)
  * Se a data é hoje e o início configurado já passou, a entrada vai para o próximo horário redondo
  * (o servidor não aceita entrada no passado) e `late` = true para a tela avisar. null = período já acabou.
@@ -44,7 +44,7 @@ const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_40
 export function preset(kind: "dia" | "pernoite", day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
   const dayStart = hhmm(Math.round(p.dayStartHour * 60)), nightStart = hhmm(Math.round(p.nightStartHour * 60));
   const r = kind === "dia"
-    ? { startDate: day, startTime: dayStart, endDate: day, endTime: nightStart }
+    ? { startDate: day, startTime: dayStart, endDate: nextDay(day), endTime: p.checkoutTime }
     : { startDate: day, startTime: nightStart, endDate: nextDay(day), endTime: p.checkoutTime };
   let late = false;
   if (day === brtDay(now)) {

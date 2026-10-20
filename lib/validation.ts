@@ -36,6 +36,10 @@ export const pricingSchema = z.object({
   dayPrice: z.number().min(0).max(10000), nightPrice: z.number().min(0).max(10000),
   dayStartHour: z.number().int().min(0).max(23), nightStartHour: z.number().int().min(0).max(23),
   checkoutTime: time.default("10:30"), // horário-limite de saída sem cobrar a manhã (igual ao dia começar = sem tolerância)
+  // pacotes com desconto; null/ausente = desligado
+  fullDayPrice: z.number().min(0).max(10000).nullable().default(null),
+  weekendPrice: z.number().min(0).max(10000).nullable().default(null),
+  weekPrice: z.number().min(0).max(10000).nullable().default(null),
 }).refine((p) => { const [h, m] = p.checkoutTime.split(":").map(Number); return h * 60 + m >= p.dayStartHour * 60 && h * 60 + m < p.nightStartHour * 60; },
   { message: "O check-out precisa ficar entre o início do dia e o início da noite." });
 export const pixSchema = z.object({
