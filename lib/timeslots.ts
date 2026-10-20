@@ -31,16 +31,25 @@ export function nextSlot(now: Date, step: number): { date: string; time: string 
   return { date: iso.slice(0, 10), time: iso.slice(11, 16) };
 }
 
+export type Preset = { startDate: string; startTime: string; endDate: string; endTime: string; late: boolean };
+const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+
 /**
- * Botão "Dia todo": do início do dia (dayStartHour) da data escolhida até o check-out do dia seguinte.
- * Se o início do dia já passou (reserva para hoje), começa no próximo horário redondo.
+ * Botões de atalho, sempre com os horários configurados no painel:
+ *  - "dia":      início do dia (dayStartHour) até o início da noite (nightStartHour) da mesma data → 1 dia
+ *  - "pernoite": início da noite até o check-out do dia seguinte → 1 noite (a manhã é isenta pela tolerância)
+ * Se a data é hoje e o início configurado já passou, a entrada vai para o próximo horário redondo
+ * (o servidor não aceita entrada no passado) e `late` = true para a tela avisar. null = período já acabou.
  */
-export function fullDay(day: string, dayStartHour: number, checkoutTime: string, step: number, now = new Date()) {
-  const next = new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-  let start = { date: day, time: hhmm(Math.round(dayStartHour * 60)) };
+export function preset(kind: "dia" | "pernoite", day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
+  const dayStart = hhmm(Math.round(p.dayStartHour * 60)), nightStart = hhmm(Math.round(p.nightStartHour * 60));
+  const r = kind === "dia"
+    ? { startDate: day, startTime: dayStart, endDate: day, endTime: nightStart }
+    : { startDate: day, startTime: nightStart, endDate: nextDay(day), endTime: p.checkoutTime };
+  let late = false;
   if (day === brtDay(now)) {
     const n = nextSlot(now, step);
-    if (`${n.date}T${n.time}` > `${start.date}T${start.time}`) start = n;
+    if (`${n.date}T${n.time}` > `${r.startDate}T${r.startTime}`) { r.startDate = n.date; r.startTime = n.time; late = true; }
   }
-  return { startDate: start.date, startTime: start.time, endDate: next, endTime: checkoutTime };
+  return `${r.startDate}T${r.startTime}` < `${r.endDate}T${r.endTime}` ? { ...r, late } : null;
 }
