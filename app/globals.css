@@ -9,3 +9,10 @@
 }
 body { background: var(--color-concreto); color: var(--color-asfalto); }
 :focus-visible { outline: 3px solid var(--color-faixa); outline-offset: 2px; }
+/* O Tailwind 4 tirou o cursor de "mãozinha" dos botões (fica a seta). Volta para tudo que é clicável. */
+@layer base {
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]), summary, select:not(:disabled), label:has(> input[type="checkbox"]),
+  input[type="checkbox"]:not(:disabled), input[type="radio"]:not(:disabled), input[type="file"]:not(:disabled),
+  input[type="date"]:not(:disabled)::-webkit-calendar-picker-indicator { cursor: pointer; }
+  button:disabled, select:disabled, input:disabled { cursor: not-allowed; }
+}
