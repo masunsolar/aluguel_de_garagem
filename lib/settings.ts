@@ -47,12 +47,18 @@ export async function getTimeStep(): Promise<TimeStep> {
   const n = (await getBooking()).timeStepMinutes;
   return isTimeStep(n) ? n : DEFAULT_TIME_STEP;
 }
+/** Quanto a garagem custa por mês (aluguel + condomínio), em reais. Só para o resumo financeiro do painel. */
+export async function getMonthlyCost(): Promise<number> {
+  const r = await sql`select value from settings where key = 'finance'`;
+  const n = Number(json(r[0]?.value)?.monthlyCost);
+  return Number.isFinite(n) && n >= 0 ? n : RULES.monthlyCostDefault;
+}
 /** Modelo da cobrança no WhatsApp; "" = usar o padrão do código (lib/whatsapp.ts). */
 export async function getChargeTemplate(): Promise<string> {
   const r = await sql`select value from settings where key = 'charge_template'`;
   const v = json(r[0]?.value); return typeof v === "string" ? v : "";
 }
-export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string, timeStepMinutes?: TimeStep) {
+export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string, timeStepMinutes?: TimeStep, monthlyCost?: number) {
   // ausente = mantém o valor atual (quem chama sem o campo não desliga o bloqueio sem querer)
   const maxUnpaid = maxUnpaidReservations === undefined ? await getMaxUnpaid() : maxUnpaidReservations;
   const timeStep = timeStepMinutes ?? await getTimeStep();
@@ -60,6 +66,7 @@ export async function saveSettings(pricing: PricingConfig, garageName: string, m
   await saveSetting("pricing", pricing);
   await saveSetting("garage_name", garageName);
   if (pix) await saveSetting("pix", pix);
+  if (monthlyCost !== undefined) await saveSetting("finance", { monthlyCost });
   if (chargeTemplate !== undefined) await saveSetting("charge_template", chargeTemplate.replace(/\r\n?/g, "\n").trim());
 }
 export async function settingsHistory() {

@@ -1,0 +1,58 @@
+# Roda em todo PR (e em push na main): tipos, build de produção e a suíte ponta a ponta (npm test).
+# O banco é um Postgres descartável criado aqui mesmo: não usa o Neon nem nenhum segredo, e some no fim.
+name: Testes
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: garagem
+          POSTGRES_PASSWORD: garagem
+          POSTGRES_DB: garagem
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U garagem" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_ADMIN_PASSWORD: senha-de-teste-do-ci
+      PORT: 3100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Checar tipos
+        run: npx tsc --noEmit
+      - name: Criar .env.local de teste (valores descartáveis, só para este job)
+        run: |
+          echo "DATABASE_URL=postgresql://garagem:garagem@localhost:5432/garagem" > .env.local
+          node scripts/hash-password.mjs "$TEST_ADMIN_PASSWORD" >> .env.local
+          echo "AUTH_SECRET=$(openssl rand -base64 48)" >> .env.local
+      - name: Criar tabelas
+        run: npm run db:init
+      - name: Build de produção
+        run: set -a && . ./.env.local && set +a && npm run build
+      - name: Subir o app
+        run: |
+          set -a && . ./.env.local && set +a
+          nohup npm start > app.log 2>&1 &
+          npx --yes wait-on@8 --timeout 60000 http://localhost:3100/api/config
+      - name: Testes ponta a ponta
+        run: npm test
+      - name: Log do app (se falhar)
+        if: failure()
+        run: cat app.log

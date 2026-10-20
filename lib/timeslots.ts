@@ -38,14 +38,18 @@ const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_40
  * Botões de atalho, sempre com os horários configurados no painel:
  *  - "dia":      início do dia (dayStartHour) até o check-out do dia seguinte → diária completa (dia + noite)
  *  - "pernoite": início da noite até o check-out do dia seguinte → 1 noite (a manhã é isenta pela tolerância)
+ *  - "fimdesemana": só quando a data é sexta: início da noite de sexta até o check-out de segunda
  * Se a data é hoje e o início configurado já passou, a entrada vai para o próximo horário redondo
  * (o servidor não aceita entrada no passado) e `late` = true para a tela avisar. null = período já acabou.
  */
-export function preset(kind: "dia" | "pernoite", day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
+export type PresetKind = "dia" | "pernoite" | "fimdesemana";
+export const isFriday = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay() === 5;
+export function preset(kind: PresetKind, day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
   const dayStart = hhmm(Math.round(p.dayStartHour * 60)), nightStart = hhmm(Math.round(p.nightStartHour * 60));
+  if (kind === "fimdesemana" && !isFriday(day)) return null;
   const r = kind === "dia"
     ? { startDate: day, startTime: dayStart, endDate: nextDay(day), endTime: p.checkoutTime }
-    : { startDate: day, startTime: nightStart, endDate: nextDay(day), endTime: p.checkoutTime };
+    : { startDate: day, startTime: nightStart, endDate: kind === "fimdesemana" ? nextDay(nextDay(nextDay(day))) : nextDay(day), endTime: p.checkoutTime };
   let late = false;
   if (day === brtDay(now)) {
     const n = nextSlot(now, step);

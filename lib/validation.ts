@@ -52,6 +52,8 @@ export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pri
   maxUnpaidReservations: z.number().int().min(0).max(50).nullable().optional(),
   // Modelo da mensagem de cobrança (WhatsApp). Vazio = volta ao padrão; ausente = não mexe.
   // Passo do seletor de horário do vizinho. Ausente = não mexe.
+  // Custo mensal da garagem (resumo financeiro). Ausente = não mexe.
+  monthlyCost: z.number().min(0).max(100000).optional(),
   timeStepMinutes: z.union([z.literal(5), z.literal(10), z.literal(30)]).optional(),
   chargeTemplate: z.string().max(1500).regex(/^[^\u0000-\u0008\u000b-\u001f]*$/, "Caracteres inválidos na mensagem.").optional() });
 export const isUuid = (v: string) => z.string().uuid().safeParse(v).success;

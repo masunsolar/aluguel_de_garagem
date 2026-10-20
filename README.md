@@ -31,6 +31,15 @@ Next.js 15 + TypeScript + Tailwind 4 + Postgres (Neon). Pensado para Vercel + Ne
 - Auditoria: o evento é gravado no **mesmo comando SQL** da mudança. Triggers impedem alterar/apagar eventos e apagar reservas de verdade (exclusão é *soft delete*). Registra criação, edição (de → para), valor, status, bloqueio/remoção, foto adicionada/removida, exclusão, cancelamento do vizinho e mudanças de configuração.
 - Erros inesperados nunca expõem detalhes técnicos: o usuário vê "erro temporário".
 
+## Testes automáticos (GitHub Actions)
+`.github/workflows/testes.yml` roda em todo PR e em todo push na `main`: checa tipos, faz o build de produção e roda a suíte inteira (`npm test`) contra um **Postgres descartável criado no próprio GitHub**. Não usa o Neon nem nenhum segredo. No PR aparece ✅ ou ❌ antes de você aceitar; se der ❌, o log do app fica no fim do job.
+
+## Backup
+O Neon gratuito só guarda **6 horas** de histórico para restaurar. Por isso o painel tem **Baixar backup**:
+- **Completo (.json)**: reservas (inclusive excluídas), histórico de eventos e configurações. Fotos e comprovantes não vão (ficam no banco).
+- **Planilha (.csv)**: só as reservas, separadas por `;`, abre direto no Excel. Células que começam com `=`, `+`, `-` ou `@` viram texto para ninguém injetar fórmula pelo nome.
+Guarde o arquivo num lugar privado: ele tem nomes, placas e telefones.
+
 ## Variáveis de ambiente
 | Variável | O que é | Como obter |
 |---|---|---|
@@ -49,11 +58,11 @@ Nenhuma outra variável é usada. **Não** coloque valores reais no repositório
 4. `npm run dev` → http://localhost:3000 e http://localhost:3000/admin/login
 
 ## Testar no Neon sem tocar na produção (branch de teste)
-A suíte (`npm test`, 53 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
+A suíte (`npm test`, 64 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
 1. No Neon: *Branches* → **Create branch** (nome `teste`, a partir do principal) → *Connect* escolhendo esse branch → copie a string dele.
 2. Em `.env.local` use a string **do branch** em `DATABASE_URL`, o `ADMIN_PASSWORD_HASH` de uma senha de teste e um `AUTH_SECRET`.
 3. `npm run db:init` → `npm run build` → `PORT=3100 npm start`
-4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `53 passaram, 0 falharam`.
+4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `64 passaram, 0 falharam`.
 5. Apague o branch `teste` no Neon.
 Isso valida o driver do Neon de verdade (consultas, constraints, triggers, concorrência). Se algo falhar só no Neon, é a informação mais valiosa antes de publicar.
 
