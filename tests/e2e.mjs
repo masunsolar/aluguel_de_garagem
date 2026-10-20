@@ -396,4 +396,21 @@ await test("passo do seletor de horário (5/10/30 min): padrão 30, configuráve
   eq((await call("GET", "/api/config")).json.timeStepMinutes, 10); eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.timeStepMinutes, 10);
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.timeStepMinutes, 10); // sem o campo: continua 10
   eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: 30 }) })).status, 200); });
+await test("PACOTES: diária R$40, fim de semana e semana; sempre a combinação mais barata; null desliga", async () => {
+  const pk = (o = {}) => cfg({ pricing: { dayPrice: 30, nightPrice: 15, dayStartHour: 9, nightStartHour: 18, checkoutTime: "10:00", fullDayPrice: 40, weekendPrice: 100, weekPrice: 260, ...o } });
+  const quote = async (a, b) => (await call("POST", "/api/admin/quote", { jar: ADM, body: { startAt: a, endAt: b } })).json;
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pk() })).status, 200);
+  eq((await call("GET", "/api/config")).json.pricing.fullDayPrice, 40);
+  const diaria = await quote(Z("2027-03-03", "09:00"), Z("2027-03-04", "10:00")); // quarta 09h → quinta 10h
+  eq(diaria.totalCents, 4000); eq(diaria.breakdown.packages[0].kind, "diaria"); eq(diaria.breakdown.packages[0].fullCents, 4500);
+  eq((await quote(Z("2027-03-03", "09:00"), Z("2027-03-03", "18:00"))).totalCents, 3000); // só o dia: avulso
+  eq((await quote(Z("2027-03-03", "18:00"), Z("2027-03-04", "10:00"))).totalCents, 1500); // pernoite
+  eq((await quote(Z("2027-03-01", "09:00"), Z("2027-03-08", "10:00"))).totalCents, 26000); // segunda → segunda: semana
+  // sexta 18h → segunda 10h: 1 noite + 2 diárias = R$95 < pacote de R$100; com o pacote a R$80 ele é usado
+  eq((await quote(Z("2027-03-05", "18:00"), Z("2027-03-08", "10:00"))).totalCents, 9500);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pk({ weekendPrice: 80 }) })).status, 200);
+  const fds = await quote(Z("2027-03-05", "18:00"), Z("2027-03-08", "10:00")); eq(fds.totalCents, 8000); eq(fds.breakdown.packages[0].kind, "fimdesemana");
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: pk({ fullDayPrice: -1 }) })).status, 400);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); // sem os campos = pacotes desligados
+  eq((await quote(Z("2027-03-03", "09:00"), Z("2027-03-04", "10:00"))).totalCents, 4500); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);
