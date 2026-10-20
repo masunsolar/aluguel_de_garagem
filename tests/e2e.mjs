@@ -388,4 +388,12 @@ await test("LOGOUT revoga na hora: token copiado antes do logout deixa de funcio
 await test("quem não está logado não consegue deslogar o admin (DELETE /login sem sessão não revoga nada)", async () => {
   const J = {}; await login(J); eq((await call("DELETE", "/api/admin/login")).status, 200); eq((await call("GET", "/api/admin/reservations", { jar: J })).status, 200); });
 
+await test("passo do seletor de horário (5/10/30 min): padrão 30, configurável, ausente = não mexe", async () => {
+  eq((await call("GET", "/api/config")).json.timeStepMinutes, 30);
+  eq((await call("PUT", "/api/admin/settings", { body: cfg({ timeStepMinutes: 5 }) })).status, 401);
+  for (const n of [0, 7, 15, 60, "5"]) eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: n }) })).status, 400, String(n));
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: 10 }) })).status, 200);
+  eq((await call("GET", "/api/config")).json.timeStepMinutes, 10); eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.timeStepMinutes, 10);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg() })).status, 200); eq((await call("GET", "/api/config")).json.timeStepMinutes, 10); // sem o campo: continua 10
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ timeStepMinutes: 30 }) })).status, 200); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);
