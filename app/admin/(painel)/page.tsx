@@ -37,6 +37,7 @@ export default function Painel() {
       <header className="flex flex-wrap items-center gap-2">
         <h1 className="mr-auto text-2xl font-bold">Controle da garagem</h1>
         <button onClick={() => setMode({ kind: "manual" })} className="rounded-lg bg-faixa px-4 py-2.5 font-semibold">+ Nova reserva manual</button>
+        <button onClick={() => setMode({ kind: "sem_agenda" })} className="rounded-lg border border-ocupado px-4 py-2.5 text-ocupado">Estacionou sem agendar</button>
         <button onClick={() => setMode({ kind: "bloqueio" })} className="rounded-lg border border-asfalto/30 px-4 py-2.5">Bloquear garagem</button>
         <details className="relative">
           <summary className="cursor-pointer list-none rounded-lg border border-asfalto/30 px-4 py-2.5">Baixar backup</summary>
@@ -81,7 +82,7 @@ export default function Painel() {
             {r.status !== "bloqueada" && <span className={`rounded-full px-3 py-1 text-sm ${r.payment_status === "pago" ? "bg-livre/15 text-livre" : r.receipt_count > 0 ? "bg-faixa/40" : "bg-faixa/20"}`}>
               {r.payment_status === "pago" ? "pago" : r.receipt_count > 0 ? "🧾 comprovante a conferir" : "pagamento pendente"}</span>}
             {r.source === "admin" && <span className="text-sm text-asfalto/60">manual</span>}
-            <span className="font-semibold">{brl(r.total_cents)}</span>
+            <span className="font-semibold">{brl(r.total_cents)}{r.fee_cents > 0 && <span className="block text-xs font-normal text-ocupado">inclui taxa {brl(r.fee_cents)}</span>}</span>
             <span title={effectiveStatus(r) !== r.status ? `Gravado: ${r.status}. Exibido pelo horário (automático).` : undefined} className={`rounded-full px-3 py-1 text-sm ${BADGE[effectiveStatus(r)]}`}>{effectiveStatus(r).replace("_", " ")}</span>
           </button>
         ))}

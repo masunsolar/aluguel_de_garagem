@@ -101,7 +101,7 @@ await test("rate limit de reservas: 9ª tentativa do mesmo IP em 1h → 429", as
 await test("minhas reservas: dono vê só as suas, sem dados pessoais; outros não veem nada", async () => {
   resA2 = (await book(D(42), "10:00", D(42), "12:00", { jar: A })).json; eq(resA2.totalCents, 3000);
   const a = await call("GET", "/api/minhas-reservas", { jar: A }); eq(a.json.length, 2);
-  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "id", "paymentStatus", "receiptCount", "shortId", "start", "status", "totalCents"]);
+  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "feeCents", "id", "paymentStatus", "receiptCount", "shortId", "start", "status", "totalCents"]);
   for (const s of ["João", "ABC1D23", "Argo"]) assert.ok(!a.text.includes(s));
   eq((await call("GET", "/api/minhas-reservas", { jar: B })).json.length, 0); eq((await call("GET", "/api/minhas-reservas")).json.length, 0); });
 await test("código de acompanhamento vincula a outro aparelho; errado → 404; 11 tentativas → 429", async () => {
@@ -298,7 +298,9 @@ await test("PIX copia e cola: CRC16 e campos corretos (vetor padrão CRC-16/CCIT
 // ================= PENDÊNCIAS E COBRANÇA =================
 const past = (id, h) => db.query("update reservations set start_at=now()-make_interval(hours => $2), end_at=now()-make_interval(hours => $2 - 2) where id=$1", [id, h]);
 const mineIds = async (jar) => (await call("GET", "/api/minhas-reservas", { jar })).json.map((x) => x.id);
-const ap = (apartment, o = {}) => ({ ...o, extra: { ...(o.extra ?? {}), apartment } });
+// cada apartamento = uma pessoa diferente (nome e placa próprios): o bloqueio reconhece a pessoa por nome, placa OU apto
+const who = (apartment) => { const n = apartment.replace(/\D/g, ""); return { apartment, name: `Morador ${n}`, plate: `APT${n.padStart(4, "0")}` }; };
+const ap = (apartment, o = {}) => ({ ...o, extra: { ...(o.extra ?? {}), ...who(apartment) } });
 let debtA, debtB;
 await test("PENDÊNCIAS: padrão = bloqueia com mais de 1; 2 reservas usadas e não pagas do apto 707 → 403 (\"Apto 707\" = \"707\"); outro apto passa", async () => {
   eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.maxUnpaidReservations, 1);
@@ -348,7 +350,7 @@ await test("WHATSAPP: opcional; guarda só dígitos; inválido → 400; só admi
   eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { phone: "" } })).status, 200); eq((await dbRow(id)).phone, null); });
 await test("COBRANÇA: detalhe traz as pendências do apto (+ a própria, mesmo futura); registrar cobrança audita cada uma; só admin", async () => {
   const d = await detail(debtB); // debtB já foi paga; debtA (usada, sem comprovante) é a pendência do 707
-  assert.ok(d.charge.some((c) => c.id === debtA)); assert.ok(!d.charge.some((c) => c.id === debtB)); for (const c of d.charge) assert.deepEqual(Object.keys(c).sort(), ["end_at", "id", "start_at", "total_cents"]);
+  assert.ok(d.charge.some((c) => c.id === debtA)); assert.ok(!d.charge.some((c) => c.id === debtB)); for (const c of d.charge) assert.deepEqual(Object.keys(c).sort(), ["end_at", "fee_cents", "id", "start_at", "total_cents"]);
   const fut = (await db.query("select id from reservations where start_at=$1", [Z(D(5), "05:00")])).rows[0].id;
   const f = await detail(fut); assert.ok(f.charge.some((c) => c.id === fut)); assert.ok(f.charge.some((c) => c.id === debtA));
   const r = await call("POST", `/api/admin/reservations/${fut}/cobranca`, { jar: ADM }); eq(r.status, 200); eq(r.json.itens, f.charge.length);
@@ -358,6 +360,50 @@ await test("COBRANÇA: detalhe traz as pendências do apto (+ a própria, mesmo 
   eq((await call("POST", `/api/admin/reservations/x/cobranca`, { jar: ADM })).status, 404);
   eq((await call("PATCH", `/api/admin/reservations/${fut}`, { jar: ADM, body: { paymentStatus: "pago" } })).status, 200);
   assert.ok(!(await detail(fut)).charge.some((c) => c.id === fut)); });
+await test("PENDÊNCIAS POR PESSOA: outro celular + outro apto não escapa: bate pela placa OU pelo nome (sem acento/maiúsculas); pessoa diferente passa", async () => {
+  const K = { name: "Kárina Teste", apartment: "811", plate: "KAR1A23" };
+  for (const [a, b, h] of [["01:00", "02:00", 70], ["03:00", "04:00", 90]]) { const J = {}; eq((await book(D(7), a, D(7), b, { jar: J, extra: K })).status, 201); await past((await mineIds(J))[0], h); }
+  const r = await book(D(7), "05:00", D(7), "06:00", { extra: { ...K, name: "Outra Pessoa", apartment: "999", plate: "kar-1a23" } }); // mesma placa
+  eq(r.status, 403); assert.ok(!/placa|nome|apart|811|KAR/i.test(r.json.error)); // não diz qual dado bateu
+  eq((await book(D(7), "05:00", D(7), "06:00", { extra: { ...K, name: "  KARINA   teste ", apartment: "998", plate: "ZZZ9Z99" } })).status, 403); // mesmo nome
+  eq((await book(D(7), "05:00", D(7), "06:00", { extra: { ...K, name: "Karina Outra", apartment: "997", plate: "ZZZ9Z98" } })).status, 201); // outra pessoa
+  // a cobrança dessa pessoa junta as pendências mesmo vindas de "outro apto"
+  const id = (await db.query("select id from reservations where start_at=$1", [Z(D(7), "05:00")])).rows[0].id;
+  await db.query("update reservations set name='Karina Teste', plate='KAR1A23' where id=$1", [id]);
+  eq((await detail(id)).charge.length, 3); });
+await test("ESTACIONOU SEM AGENDAR: moradores que já usaram (só admin, agrupados, com pendências); registro com taxa somada e mostrada separada; recalcular mantém a taxa", async () => {
+  eq((await call("GET", "/api/admin/residents")).status, 401);
+  const list = (await call("GET", "/api/admin/residents", { jar: ADM })).json;
+  const k = list.find((x) => x.name === "Kárina Teste" && x.apartment === "811"); assert.ok(k, "morador listado");
+  eq(k.uses, 2); eq(k.plate, "KAR1A23"); eq(k.pendingCount, 2); eq(k.pendingCents, 3000); // as 2 já usadas (a futura não conta)
+  assert.ok(!list.some((x) => x.name === "Horário bloqueado")); // bloqueios não viram morador
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, noBookingFee: 12.5 }) })).status, 200);
+  eq((await call("GET", "/api/admin/settings", { jar: ADM })).json.noBookingFee, 12.5);
+  eq((await call("PUT", "/api/admin/settings", { jar: ADM, body: cfg({ maximumReservationAdvanceDays: 14, noBookingFee: -1 }) })).status, 400);
+  const c = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: Z(D(-10), "09:00"), endAt: Z(D(-10), "17:00"), status: "irregular",
+    name: k.name, apartment: k.apartment, plate: k.plate, feeCents: 1250 } });
+  eq(c.status, 201, c.text);
+  let row = await dbRow(c.json.id); eq(row.fee_cents, 1250); eq(row.total_cents, 3000 + 1250); // dia R$30 + taxa
+  const d = await detail(c.json.id); const item = d.charge.find((x) => x.id === c.json.id); eq(item.fee_cents, 1250); eq(item.total_cents, 4250);
+  eq(d.charge.length, 3); // as 2 já usadas em aberto + esta
+  // mudar o horário recalculando: o uso muda, a taxa fica
+  eq((await call("PATCH", `/api/admin/reservations/${c.json.id}`, { jar: ADM, body: { endAt: Z(D(-9), "10:00"), priceMode: "recalc" } })).status, 200);
+  row = await dbRow(c.json.id); eq(row.fee_cents, 1250); // uso recalculado (abaixo) + a mesma taxa
+  eq(row.total_cents - row.fee_cents, (await call("POST", "/api/admin/quote", { jar: ADM, body: { startAt: Z(D(-10), "09:00"), endAt: Z(D(-9), "10:00") } })).json.totalCents);
+  // editar só a taxa / tirar a taxa: total acompanha e fica no histórico
+  eq((await call("PATCH", `/api/admin/reservations/${c.json.id}`, { jar: ADM, body: { feeCents: 0 } })).status, 200);
+  const r2 = await dbRow(c.json.id); eq(r2.fee_cents, 0); eq(r2.total_cents, row.total_cents - 1250);
+  assert.ok((await db.query("select 1 from reservation_events where reservation_id=$1 and details->'changes' ? 'taxa'", [c.json.id])).rowCount === 1);
+  eq((await call("PATCH", `/api/admin/reservations/${c.json.id}`, { jar: ADM, body: { feeCents: -5 } })).status, 400);
+  // bloqueio nunca tem taxa
+  const b = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: Z(D(12), "03:00"), endAt: Z(D(12), "04:00"), status: "bloqueada", feeCents: 999 } });
+  eq((await dbRow(b.json.id)).fee_cents, 0);
+  // quitar a Karina para não afetar os testes seguintes
+  await db.query("update reservations set payment_status='pago', paid_at=now() where plate in ('KAR1A23','ZZZ9Z98','ZZZ9Z99') or name ilike 'kar%'"); });
+await test("VIZINHO vê a taxa separada em \"Minhas reservas\"", async () => {
+  const J = {}; eq((await book(D(8), "01:00", D(8), "02:00", { jar: J, extra: who("812") })).status, 201); const [id] = await mineIds(J);
+  eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { feeCents: 1000 } })).status, 200);
+  const m = (await call("GET", "/api/minhas-reservas", { jar: J })).json[0]; eq(m.feeCents, 1000); eq(m.totalCents, 1500 + 1000); });
 await test("MENSAGEM DE COBRANÇA: admin edita (auditado); PUT sem o campo mantém; vazio volta ao padrão; caractere de controle → 400; só admin", async () => {
   const tpl = "Olá {nome}\n{reservas}\nTotal {total}\nPIX {pix}";
   eq((await call("PUT", "/api/admin/settings", { body: cfg({ chargeTemplate: tpl }) })).status, 401);
@@ -380,7 +426,13 @@ await test("funções puras: apartamento normalizado e link do WhatsApp", async 
   eq(W.waLink("", "😀✅"), "https://api.whatsapp.com/send?text=%F0%9F%98%80%E2%9C%85"); // emoji em UTF-8
   assert.match(W.waLink("", "x"), /^https:\/\/api\.whatsapp\.com\/send\?text=x$/);
   const m = W.chargeMessage("Karina Waldrich", [{ start_at: Z(D(3), "01:00"), end_at: Z(D(3), "02:00"), total_cents: 1500 }, { start_at: Z(D(4), "01:00"), end_at: Z(D(4), "02:00"), total_cents: 3000 }], "pix@exemplo.com");
-  assert.match(m, /^Oi, Karina!/); assert.match(m, /Total: R\$\s45,00/); assert.match(m, /Chave PIX: pix@exemplo\.com/); });
+  assert.match(m, /^Oi, Karina!/); assert.match(m, /Total: R\$\s45,00/); assert.match(m, /Chave PIX: pix@exemplo\.com/);
+  const t = W.chargeMessage("K", [{ start_at: Z(D(3), "01:00"), end_at: Z(D(3), "02:00"), total_cents: 2500, fee_cents: 1000 }]);
+  assert.match(t, /R\$\s25,00 \(inclui R\$\s10,00 de taxa por estacionar sem agendar\)/); assert.match(t, /Total: R\$\s25,00/);
+  let I; try { I = await import("../lib/identity.ts"); } catch { return; }
+  eq(I.nameKey("  Kárina   SILVA "), "karina silva"); eq(I.nameKey("Jo"), ""); eq(I.plateKey("abc-1d23"), "ABC1D23"); eq(I.plateKey("123"), "");
+  eq(I.samePerson({ apartment: "Apto 101" }, { apartment: "101" }), true); eq(I.samePerson({ name: "", plate: "" }, { name: "", plate: "" }), false);
+  eq(I.samePerson({ name: "Ana", apartment: "1", plate: "AAA1A11" }, { name: "Ana B", apartment: "2", plate: "AAA1A12" }), false); });
 await test("LOGOUT revoga na hora: token copiado antes do logout deixa de funcionar (API e página)", async () => {
   const J = {}; await login(J); const copy = { adm: J.adm }; eq((await call("GET", "/api/admin/reservations", { jar: copy })).status, 200);
   eq((await call("DELETE", "/api/admin/login", { jar: J })).status, 200); eq(Object.keys(J).length, 0);

@@ -25,7 +25,9 @@ export const adminCreateSchema = z.object({
   startAt: dt, endAt: dt, status: z.enum(STATUSES).default("confirmada"),
   name: txt(80), apartment: txt(20), carBrand: txt(40), carModel: txt(40), carColor: txt(30),
   plate: plate.nullish().or(z.literal("")), notes: txt(1000), phone: phone.nullish(),
+  // totalCents = valor do USO (sem a taxa). feeCents = taxa extra (ex.: estacionou sem agendar), somada por cima.
   totalCents: z.number().int().min(0).max(10_000_000).nullish(),
+  feeCents: z.number().int().min(0).max(10_000_000).optional(),
   paymentStatus: z.enum(PAYMENT_STATUSES).optional(), // ausente na criação = pendente
 });
 // priceMode só vale quando o horário muda: "keep" mantém o valor contratado, "recalc" usa os preços atuais (decisão explícita do admin)
@@ -54,6 +56,8 @@ export const settingsSchema = z.object({ pix: pixSchema.optional(), pricing: pri
   // Passo do seletor de horário do vizinho. Ausente = não mexe.
   // Custo mensal da garagem (resumo financeiro). Ausente = não mexe.
   monthlyCost: z.number().min(0).max(100000).optional(),
+  // Taxa sugerida para quem estaciona sem agendar (R$). Ausente = não mexe.
+  noBookingFee: z.number().min(0).max(10000).optional(),
   timeStepMinutes: z.union([z.literal(5), z.literal(10), z.literal(30)]).optional(),
   chargeTemplate: z.string().max(1500).regex(/^[^\u0000-\u0008\u000b-\u001f]*$/, "Caracteres inválidos na mensagem.").optional() });
 export const isUuid = (v: string) => z.string().uuid().safeParse(v).success;

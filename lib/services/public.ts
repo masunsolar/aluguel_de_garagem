@@ -31,9 +31,10 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
   if (+end - +start < RULES.minMinutes * 60_000) throw new UserError(`A reserva mínima é de ${RULES.minMinutes} minutos.`);
   if (+end - +start > RULES.maxDurationDays * DAY) throw new UserError(`A reserva máxima é de ${RULES.maxDurationDays} dias.`);
   const maxUnpaid = await getMaxUnpaid(); // configurável no painel; null = desligado
-  if (maxUnpaid !== null && (await unpaidUsedFor(i.apartment)).length > maxUnpaid)
-    // Mensagem genérica: não diz quantas nem de quando (só o admin vê os detalhes)
-    throw new ForbiddenError("Não foi possível reservar: há pagamentos pendentes de reservas anteriores deste apartamento. Pague pelo PIX e envie o comprovante em “Minhas reservas”, ou fale com o responsável pela garagem.");
+  // A pessoa é reconhecida por nome, placa OU apartamento: reservar de outro celular ou com outro apto não escapa do bloqueio
+  if (maxUnpaid !== null && (await unpaidUsedFor({ name: i.name, apartment: i.apartment, plate: i.plate })).length > maxUnpaid)
+    // Mensagem genérica: não diz quantas, de quando nem qual dado bateu (só o admin vê os detalhes)
+    throw new ForbiddenError("Não foi possível reservar: há pagamentos pendentes de reservas anteriores. Pague pelo PIX e envie o comprovante em “Minhas reservas”, ou fale com o responsável pela garagem.");
   const { totalCents, breakdown } = calculatePrice(start, end, await getPricing()); // preço SEMPRE calculado aqui; o do navegador é só prévia
   const code = randomBytes(9).toString("base64url"); // código secreto de acompanhamento (72 bits; só o hash é guardado)
   const details = JSON.stringify({ entrada: start.toISOString(), saida: end.toISOString(), totalCents });
@@ -54,6 +55,7 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
 
 const toMine = (r: any) => ({
   id: r.id as string, shortId: String(r.id).slice(0, 8).toUpperCase(), start: iso(r.start_at), end: iso(r.end_at), totalCents: r.total_cents,
+  feeCents: Number(r.fee_cents ?? 0), // taxa já incluída no total (ex.: estacionou sem agendar)
   breakdown: (json(r.price_breakdown) as PriceBreakdown | null) ?? null, // só períodos e valores; nada pessoal
   paymentStatus: r.payment_status as "pendente" | "pago", receiptCount: Number(r.receipt_count ?? 0),
   status: r.status === "irregular" ? "em_analise" : effectiveStatus(r), // o vizinho não vê a marcação interna; em andamento/finalizada são derivados do horário
@@ -61,7 +63,7 @@ const toMine = (r: any) => ({
 export async function listMine(ids: string[]) {
   ids = ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i));
   if (!ids.length) return [];
-  const rows = await sql`select id, start_at, end_at, status, total_cents, price_breakdown, payment_status,
+  const rows = await sql`select id, start_at, end_at, status, total_cents, fee_cents, price_breakdown, payment_status,
     (select count(*)::int from payment_receipts c where c.reservation_id = reservations.id) as receipt_count from reservations
     where id::text = any(string_to_array(${ids.join(",")}, ',')) and deleted_at is null and status <> 'bloqueada' order by start_at desc`;
   return rows.map(toMine);

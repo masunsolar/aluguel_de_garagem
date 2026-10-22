@@ -46,7 +46,7 @@ export default function MyReservations() {
           <li key={r.shortId} className="rounded-xl bg-white p-3">
            <div className="flex items-center justify-between">
             <div><div>{fmt(r.start)} → {fmt(r.end)}</div><div className="text-sm text-asfalto/60">#{r.shortId} • {LABEL[r.status] ?? r.status}</div></div>
-            <div className="text-right"><b>{brl(r.totalCents)}</b>{["pendente", "confirmada"].includes(r.status) && new Date(r.start) > new Date() && <button onClick={() => cancel(r.id)} className="block text-sm text-ocupado underline">Cancelar</button>}</div>
+            <div className="text-right"><b>{brl(r.totalCents)}</b>{r.feeCents > 0 && <span className="block text-xs text-ocupado">inclui {brl(r.feeCents)} de taxa por estacionar sem agendar</span>}{["pendente", "confirmada"].includes(r.status) && new Date(r.start) > new Date() && <button onClick={() => cancel(r.id)} className="block text-sm text-ocupado underline">Cancelar</button>}</div>
            </div>
            {r.status !== "cancelada" && (
              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -57,7 +57,7 @@ export default function MyReservations() {
                    <input type="file" accept="image/*,application/pdf" hidden disabled={!!sending} onChange={(e) => { sendReceipt(r.id, e.target.files?.[0]); e.target.value = ""; }} /></label>)}
              </div>
            )}
-           {r.breakdown && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Ver o que foi cobrado</summary><PriceBreakdown breakdown={r.breakdown} chargedCents={r.totalCents} className="mt-1" /></details>}
+           {r.breakdown && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Ver o que foi cobrado</summary><PriceBreakdown breakdown={r.breakdown} chargedCents={r.totalCents - (r.feeCents ?? 0)} className="mt-1" />{r.feeCents > 0 && <p className="mt-1">+ Taxa por estacionar sem agendar: <b>{brl(r.feeCents)}</b></p>}</details>}
            {["pendente", "confirmada", "em_andamento", "finalizada"].includes(r.status) && r.paymentStatus !== "pago" && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Pagar via PIX</summary><PixBox pix={pix} totalCents={r.totalCents} /></details>}
           </li>
         ))}
