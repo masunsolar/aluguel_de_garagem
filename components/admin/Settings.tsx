@@ -5,7 +5,7 @@ import { TIME_STEPS } from "@/lib/timeslots";
 import { CHARGE_PLACEHOLDERS, DEFAULT_CHARGE_TEMPLATE, chargeMessage } from "@/lib/whatsapp";
 
 // Exemplo só para a prévia da mensagem (não é gravado)
-const SAMPLE = [{ start_at: "2026-10-18T21:00:00Z", end_at: "2026-10-19T12:00:00Z", total_cents: 1500 }, { start_at: "2026-10-20T09:00:00Z", end_at: "2026-10-20T21:00:00Z", total_cents: 3000 }];
+const SAMPLE = [{ start_at: "2026-10-18T21:00:00Z", end_at: "2026-10-19T12:00:00Z", total_cents: 1500 }, { start_at: "2026-10-20T09:00:00Z", end_at: "2026-10-20T21:00:00Z", total_cents: 4000, fee_cents: 1000 }];
 
 const input = "mt-1 block w-28 rounded-lg border border-asfalto/20 bg-white px-3 py-2";
 export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
@@ -27,7 +27,8 @@ export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
       <label>Horários de quantos em quantos min<select className={input} value={s.timeStepMinutes ?? 30} onChange={(e) => setS({ ...s, timeStepMinutes: Number(e.target.value) })}>
         {TIME_STEPS.map((n) => <option key={n} value={n}>{n} min</option>)}
       </select></label>
-      <p className="w-full text-xs text-asfalto/60">O apartamento com mais pendências que isso não consegue fazer novas reservas. Contam só reservas já usadas, não pagas e sem comprovante enviado. 1 = bloqueia a partir da 2ª; 0 = bloqueia com qualquer pendência; vazio = desligado. Reservas manuais suas não são bloqueadas.</p>
+      <label>Taxa por estacionar sem agendar (R$)<input type="number" step="0.01" min={0} className={input} value={s.noBookingFee ?? 10} onChange={(e) => setS({ ...s, noBookingFee: Number(e.target.value) })} /></label>
+      <p className="w-full text-xs text-asfalto/60">Quem tem mais pendências que isso não consegue fazer novas reservas. A pessoa é reconhecida pelo <b>nome, placa ou apartamento</b> (qualquer um que bater), então trocar de celular ou digitar outro apartamento não escapa. Contam só reservas já usadas, não pagas e sem comprovante enviado. 1 = bloqueia a partir da 2ª; 0 = bloqueia com qualquer pendência; vazio = desligado. Reservas manuais suas não são bloqueadas. A taxa é a sugerida ao registrar "Estacionou sem agendar"; dá para mudar em cada registro.</p>
       <label>Custo mensal da garagem (R$)<input type="number" step="0.01" min={0} className={input} value={s.monthlyCost ?? 200} onChange={(e) => setS({ ...s, monthlyCost: Number(e.target.value) })} /></label>
       <p className="w-full text-xs text-asfalto/60">Usado só no resumo do mês para mostrar quanto sobra depois de pagar a garagem.</p>
       <label className="w-full">Nome da garagem<input className="mt-1 block w-full max-w-sm rounded-lg border border-asfalto/20 px-3 py-2" value={s.garageName} onChange={(e) => setS({ ...s, garageName: e.target.value })} /></label>
@@ -74,7 +75,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
       </fieldset>
       <button className="rounded-lg bg-asfalto px-4 py-2.5 text-white">Salvar</button>
       {msg && <span role="status">{msg}</span>}
-      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "reservas/horários", charge_template: "mensagem de cobrança", finance: "custo mensal" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
+      {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "reservas/horários", charge_template: "mensagem de cobrança", finance: "custo mensal", fees: "taxa sem agendamento" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
     </form>
   );
 }

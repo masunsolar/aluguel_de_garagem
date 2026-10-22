@@ -22,7 +22,7 @@ export function waLink(phone: string | null | undefined, text: string): string {
   return `https://api.whatsapp.com/send?${n ? `phone=${n}&` : ""}text=${encodeURIComponent(text)}`;
 }
 
-export type ChargeItem = { start_at: string; end_at: string; total_cents: number };
+export type ChargeItem = { start_at: string; end_at: string; total_cents: number; fee_cents?: number };
 
 /** Marcadores que o admin pode usar no texto da cobrança (Configurações). */
 export const CHARGE_PLACEHOLDERS = {
@@ -47,7 +47,8 @@ export const DEFAULT_CHARGE_TEMPLATE = [
 export function chargeMessage(name: string | null | undefined, items: ChargeItem[], pixKey?: string, template?: string | null): string {
   const first = (name ?? "").trim().split(/\s+/)[0] ?? "";
   const total = items.reduce((s, i) => s + i.total_cents, 0);
-  const reservas = items.map((i) => `• ${fmtBR(i.start_at)} → ${fmtBR(i.end_at)}: ${brl(i.total_cents)}`).join("\n");
+  // A taxa já está no valor da linha; aparece separada para a pessoa entender o que está pagando
+  const reservas = items.map((i) => `• ${fmtBR(i.start_at)} → ${fmtBR(i.end_at)}: ${brl(i.total_cents)}${i.fee_cents ? ` (inclui ${brl(i.fee_cents)} de taxa por estacionar sem agendar)` : ""}`).join("\n");
   const pix = (pixKey ?? "").trim();
   const tpl = template?.trim() ? template : DEFAULT_CHARGE_TEMPLATE;
   return tpl

@@ -53,12 +53,18 @@ export async function getMonthlyCost(): Promise<number> {
   const n = Number(json(r[0]?.value)?.monthlyCost);
   return Number.isFinite(n) && n >= 0 ? n : RULES.monthlyCostDefault;
 }
+/** Taxa sugerida (R$) para quem estaciona sem agendar. O valor real fica gravado em cada reserva. */
+export async function getNoBookingFee(): Promise<number> {
+  const r = await sql`select value from settings where key = 'fees'`;
+  const n = Number(json(r[0]?.value)?.noBookingFee);
+  return Number.isFinite(n) && n >= 0 ? n : RULES.noBookingFeeDefault;
+}
 /** Modelo da cobrança no WhatsApp; "" = usar o padrão do código (lib/whatsapp.ts). */
 export async function getChargeTemplate(): Promise<string> {
   const r = await sql`select value from settings where key = 'charge_template'`;
   const v = json(r[0]?.value); return typeof v === "string" ? v : "";
 }
-export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string, timeStepMinutes?: TimeStep, monthlyCost?: number) {
+export async function saveSettings(pricing: PricingConfig, garageName: string, maximumReservationAdvanceDays: number, pix?: PixConfig, maxUnpaidReservations?: number | null, chargeTemplate?: string, timeStepMinutes?: TimeStep, monthlyCost?: number, noBookingFee?: number) {
   // ausente = mantém o valor atual (quem chama sem o campo não desliga o bloqueio sem querer)
   const maxUnpaid = maxUnpaidReservations === undefined ? await getMaxUnpaid() : maxUnpaidReservations;
   const timeStep = timeStepMinutes ?? await getTimeStep();
@@ -67,6 +73,7 @@ export async function saveSettings(pricing: PricingConfig, garageName: string, m
   await saveSetting("garage_name", garageName);
   if (pix) await saveSetting("pix", pix);
   if (monthlyCost !== undefined) await saveSetting("finance", { monthlyCost });
+  if (noBookingFee !== undefined) await saveSetting("fees", { noBookingFee });
   if (chargeTemplate !== undefined) await saveSetting("charge_template", chargeTemplate.replace(/\r\n?/g, "\n").trim());
 }
 export async function settingsHistory() {

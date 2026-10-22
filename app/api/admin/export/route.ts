@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const denied = await requireAdmin(); if (denied) return denied;
   const day = new Date().toISOString().slice(0, 10);
-  const reservations = (await sql`select r.id, r.start_at, r.end_at, r.status, r.source, r.total_cents, r.payment_status, r.paid_at,
+  const reservations = (await sql`select r.id, r.start_at, r.end_at, r.status, r.source, r.total_cents, r.fee_cents, r.payment_status, r.paid_at,
       r.name, r.apartment, r.car_brand, r.car_model, r.car_color, r.plate, r.phone, r.notes, r.price_breakdown, r.created_at, r.updated_at, r.deleted_at,
       (select count(*)::int from reservation_photos p where p.reservation_id = r.id) as photo_count,
       (select count(*)::int from payment_receipts c where c.reservation_id = r.id) as receipt_count
@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 
   if (new URL(req.url).searchParams.get("format") === "csv") {
     const cols: [string, (r: any) => unknown][] = [["id", (r) => r.id], ["entrada", (r) => fmtBR(r.start_at)], ["saída", (r) => fmtBR(r.end_at)],
-      ["status", (r) => r.status], ["origem", (r) => r.source], ["valor", (r) => (r.total_cents / 100).toFixed(2).replace(".", ",")],
+      ["status", (r) => r.status], ["origem", (r) => r.source], ["valor", (r) => (r.total_cents / 100).toFixed(2).replace(".", ",")], ["taxa incluída", (r) => (r.fee_cents / 100).toFixed(2).replace(".", ",")],
       ["pagamento", (r) => r.payment_status], ["pago em", (r) => (r.paid_at ? fmtBR(r.paid_at) : "")], ["nome", (r) => r.name], ["apto", (r) => r.apartment],
       ["marca", (r) => r.car_brand], ["modelo", (r) => r.car_model], ["cor", (r) => r.car_color], ["placa", (r) => r.plate], ["telefone", (r) => r.phone],
       ["observações", (r) => r.notes], ["excluída em", (r) => (r.deleted_at ? fmtBR(r.deleted_at) : "")]];

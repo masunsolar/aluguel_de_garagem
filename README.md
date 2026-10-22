@@ -18,6 +18,8 @@ Next.js 15 + TypeScript + Tailwind 4 + Postgres (Neon). Pensado para Vercel + Ne
   - O servidor sempre calcula; o do navegador é só prévia. O **valor cobrado fica gravado na reserva** e nunca muda sozinho: mudar preços não afeta reservas antigas.
   - Ao editar o **horário** de uma reserva, o painel mostra "o novo horário resultaria em R$X com os preços atuais" e você escolhe **Manter valor atual** (padrão) ou **Recalcular**. Editar o valor à mão também é permitido. Tudo isso fica no histórico (de → para).
 - **Antecedência máxima** (`maximumReservationAdvanceDays`, padrão 14, ajustável de 1 a 60 em *Configurações*): vale no servidor, não só na tela. Outros limites ficam em `lib/rules.ts` (reserva de 30 min a 14 dias, 10 fotos por reserva, 2 MB por foto).
+- **Pendências e bloqueio**: a pessoa é reconhecida pelo **nome, placa ou apartamento** (`lib/identity.ts`, qualquer um que bater, normalizado). Quem passa do limite de pendências (*Configurações*) não reserva, mesmo usando outro celular ou outro apartamento. A cobrança no WhatsApp junta tudo que está em aberto dessa pessoa.
+- **Estacionou sem agendar**: botão no painel que abre o registro já como *irregular*, com a lista de **moradores que já usaram** (montada a partir das reservas) para preencher nome, apto, carro, placa e WhatsApp, e a **taxa** sugerida (configurável). A taxa fica em `fee_cents`, já incluída em `total_cents`, e aparece separada na cobrança, em "Minhas reservas" e no backup.
 - **Conflitos**: *exclusion constraint* no banco (`db/schema.sql`). Ocupam a vaga: pendente, confirmada, em_andamento, **irregular** e bloqueada. Intervalo `[)`: 10:00→12:00 permite 12:00→14:00 e recusa 11:59→13:00. Se você registrar algo que conflita, o painel lista as reservas em conflito com atalho para abri-las.
 - **Status** (`lib/status.ts`): o status **gravado** só muda por ação sua. Para exibição, uma reserva *confirmada* aparece como **em andamento** quando o horário começa e **finalizada** quando termina, calculado na hora de mostrar. Nada é gravado, e valor e histórico não mudam com o relógio.
 - **Datas** (`lib/time.ts`): o banco guarda instantes (`timestamptz`); todo horário digitado/exibido é `America/Sao_Paulo`, convertido por `Intl`, sem depender do fuso do navegador ou do servidor. Datas impossíveis (30/02) são recusadas.
@@ -58,11 +60,11 @@ Nenhuma outra variável é usada. **Não** coloque valores reais no repositório
 4. `npm run dev` → http://localhost:3000 e http://localhost:3000/admin/login
 
 ## Testar no Neon sem tocar na produção (branch de teste)
-A suíte (`npm test`, 64 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
+A suíte (`npm test`, 67 verificações) grava dados de teste e zera a tabela de limites, então **nunca** aponte para o banco real.
 1. No Neon: *Branches* → **Create branch** (nome `teste`, a partir do principal) → *Connect* escolhendo esse branch → copie a string dele.
 2. Em `.env.local` use a string **do branch** em `DATABASE_URL`, o `ADMIN_PASSWORD_HASH` de uma senha de teste e um `AUTH_SECRET`.
 3. `npm run db:init` → `npm run build` → `PORT=3100 npm start`
-4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `64 passaram, 0 falharam`.
+4. Em outro terminal: `TEST_ADMIN_PASSWORD="a senha de teste" npm test`. Resultado esperado: `67 passaram, 0 falharam`.
 5. Apague o branch `teste` no Neon.
 Isso valida o driver do Neon de verdade (consultas, constraints, triggers, concorrência). Se algo falhar só no Neon, é a informação mais valiosa antes de publicar.
 

@@ -7,7 +7,9 @@ import { brl, calculatePrice } from "../pricing";
 import { getPricing } from "../settings";
 import { fmtBR } from "../time";
 import { adminCreateSchema, adminPatchSchema } from "../validation";
-import { unpaidUsedFor, type ChargeRow } from "./debts";
+import { openUsedRows, unpaidUsedFor, type ChargeRow } from "./debts";
+import { nameKey, plateKey } from "../identity";
+import { apartmentKey } from "../apartment";
 
 const FIELDS = {
   startAt: ["start_at", "entrada"], endAt: ["end_at", "saída"], status: ["status", "status"], name: ["name", "responsável"],
@@ -46,9 +48,9 @@ export async function getDetail(id: string) {
   const receipts = await sql`select id, mime, created_at from payment_receipts where reservation_id = ${id} order by created_at`;
   // Para o botão "Cobrar": pendências já usadas do mesmo apartamento + esta reserva (mesmo que futura), se estiver em aberto
   const row = strip(r);
-  const charge: ChargeRow[] = row.status === "bloqueada" ? [] : await unpaidUsedFor(r.apartment);
+  const charge: ChargeRow[] = row.status === "bloqueada" ? [] : await unpaidUsedFor({ name: r.name, apartment: r.apartment, plate: r.plate });
   if (row.payment_status === "pendente" && !["cancelada", "bloqueada"].includes(row.status) && row.total_cents > 0 && !charge.some((c) => c.id === id))
-    charge.push({ id, start_at: row.start_at, end_at: row.end_at, total_cents: row.total_cents });
+    charge.push({ id, start_at: row.start_at, end_at: row.end_at, total_cents: row.total_cents, fee_cents: row.fee_cents ?? 0 });
   charge.sort((a, b) => a.start_at.localeCompare(b.start_at));
   return { ...row, charge, events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
     receipts: receipts.map((c) => ({ id: c.id as string, mime: c.mime as string, created_at: iso(c.created_at) })) };
@@ -59,15 +61,16 @@ export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
   if (end <= start) throw new UserError("A saída precisa ser depois da entrada.");
   // Detalhamento só quando o valor sai do cálculo; valor digitado à mão ou bloqueio não têm períodos
   const calc = i.totalCents == null && i.status !== "bloqueada" ? calculatePrice(start, end, await getPricing()) : null;
-  const total = i.totalCents ?? calc?.totalCents ?? 0;
+  const fee = i.status === "bloqueada" ? 0 : i.feeCents ?? 0; // taxa extra (ex.: sem agendamento), somada ao uso
+  const total = (i.totalCents ?? calc?.totalCents ?? 0) + fee;
   const breakdown = calc ? JSON.stringify(calc.breakdown) : null;
   const action = i.status === "bloqueada" ? "bloqueio_criado" : "criada_manualmente";
   const pay = i.paymentStatus ?? "pendente"; // toda reserva entra como pagamento pendente, salvo se o admin já marcar como pago
-  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), pagamento: pay, motivo_ou_obs: i.notes ?? null });
+  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), ...(fee > 0 && { taxa: brl(fee) }), pagamento: pay, motivo_ou_obs: i.notes ?? null });
   try {
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes, phone)
-        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${breakdown}::jsonb, ${pay}, ${pay === "pago" ? new Date().toISOString() : null}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
+      with r as (insert into reservations (start_at, end_at, total_cents, fee_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes, phone)
+        values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${fee}, ${breakdown}::jsonb, ${pay}, ${pay === "pago" ? new Date().toISOString() : null}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
                 ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}, ${i.phone || null}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
@@ -87,19 +90,25 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
     if (nv !== ov && col !== "status") changes[label] = { from: show(col, cur[col]), to: show(col, nv) };
     next[col] = nv;
   };
-  for (const k of Object.keys(FIELDS) as Key[]) if (patch[k] !== undefined && !(k === "totalCents" && patch[k] === null)) apply(FIELDS[k][0], FIELDS[k][1], patch[k]);
+  for (const k of Object.keys(FIELDS) as Key[]) if (k !== "totalCents" && patch[k] !== undefined) apply(FIELDS[k][0], FIELDS[k][1], patch[k]);
 
   if (new Date(next.end_at) <= new Date(next.start_at)) throw new UserError("A saída precisa ser depois da entrada.");
   // Valor contratado NUNCA muda sozinho: ao mudar o horário o admin escolhe "keep" (padrão) ou "recalc" (preços atuais).
+  // total_cents = uso + taxa. O admin edita os dois separados; a taxa sobrevive a recalcular o uso.
   const timesChanged = "entrada" in changes || "saída" in changes;
+  const curFee = Number(cur.fee_cents ?? 0), curUse = cur.total_cents - curFee;
+  const fee = next.status === "bloqueada" ? 0 : patch.feeCents ?? curFee;
+  let use = curUse;
   let preco: "manual" | "recalculado" | "mantido" | undefined;
-  if ("valor" in changes) preco = "manual";
+  if (patch.totalCents != null && patch.totalCents !== curUse) { use = patch.totalCents; preco = "manual"; }
   else if (timesChanged && next.status !== "bloqueada") {
     if (patch.priceMode === "recalc") {
       const q = calculatePrice(new Date(next.start_at), new Date(next.end_at), await getPricing());
-      apply("total_cents", "valor", q.totalCents); next.price_breakdown = q.breakdown; preco = "recalculado";
+      use = q.totalCents; next.price_breakdown = q.breakdown; preco = "recalculado";
     } else { next.price_breakdown = null; preco = "mantido"; } // valor mantido com outro horário: o detalhamento antigo não vale mais
   }
+  if (fee !== curFee) changes["taxa"] = { from: brl(curFee), to: brl(fee) };
+  apply("total_cents", "valor", use + fee); next.fee_cents = fee;
 
   // Data do pagamento: registrada quando passa a "pago"; some se voltar a "pendente"
   next.paid_at = next.payment_status === "pago" ? (cur.payment_status === "pago" ? cur.paid_at : new Date()) : null;
@@ -111,7 +120,7 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   try {
     const r = await sql`
       with u as (update reservations set start_at = ${s.toISOString()}, end_at = ${e.toISOString()}, status = ${next.status},
-        total_cents = ${next.total_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
+        total_cents = ${next.total_cents}, fee_cents = ${next.fee_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
         car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, phone = ${next.phone},
         payment_status = ${next.payment_status}, paid_at = ${next.paid_at ? new Date(next.paid_at).toISOString() : null}, updated_at = now()
         where id = ${id} and deleted_at is null returning id)
@@ -145,6 +154,35 @@ export async function deletePhoto(photoId: string) {
 export async function getPhoto(id: string) {
   const [p] = await sql`select mime, encode(data, 'base64') as b64 from reservation_photos where id = ${id}`;
   return p ? { mime: p.mime as string, bytes: Buffer.from(p.b64, "base64") } : null;
+}
+
+/**
+ * Moradores que já usaram a garagem, montados a partir das reservas (não existe cadastro separado).
+ * Agrupa por nome + apartamento; os dados (carro, placa, WhatsApp) vêm da reserva mais recente, completando
+ * com as anteriores o que estiver vazio. `pendingCents` usa a mesma regra do bloqueio (nome, placa ou apto).
+ */
+export async function listResidents() {
+  const rows = await sql`select r.id, r.name, r.apartment, r.phone, r.car_brand, r.car_model, r.car_color, r.plate, r.start_at, r.status
+    from reservations r where r.deleted_at is null and r.status not in ('bloqueada','cancelada') and coalesce(trim(r.name), '') <> ''
+    order by r.start_at desc`;
+  type Resident = { key: string; name: string; apartment: string | null; phone: string | null; carBrand: string | null; carModel: string | null;
+    carColor: string | null; plate: string | null; plates: string[]; uses: number; lastUse: string; pendingCents: number; pendingCount: number };
+  const byKey = new Map<string, Resident>();
+  for (const r of rows) {
+    const key = `${nameKey(r.name)}|${apartmentKey(r.apartment)}`;
+    if (key.startsWith("|")) continue; // nome curto demais para identificar alguém
+    let p = byKey.get(key);
+    if (!p) byKey.set(key, p = { key, name: r.name, apartment: r.apartment, phone: r.phone, carBrand: r.car_brand, carModel: r.car_model,
+      carColor: r.car_color, plate: r.plate, plates: [], uses: 0, lastUse: iso(r.start_at)!, pendingCents: 0, pendingCount: 0 });
+    p.phone ??= r.phone; p.carBrand ??= r.car_brand; p.carModel ??= r.car_model; p.carColor ??= r.car_color; p.plate ??= r.plate; p.apartment ??= r.apartment;
+    const pk = plateKey(r.plate); if (pk && !p.plates.includes(pk)) p.plates.push(pk);
+    p.uses++;
+  }
+  const list = [...byKey.values()];
+  const open = await openUsedRows();
+  const debts = await Promise.all(list.map((p) => unpaidUsedFor({ name: p.name, apartment: p.apartment, plate: p.plate }, open)));
+  list.forEach((p, i) => { p.pendingCount = debts[i].length; p.pendingCents = debts[i].reduce((t, d) => t + d.total_cents, 0); });
+  return list.sort((a, b) => b.lastUse.localeCompare(a.lastUse));
 }
 
 /** Quanto custaria um horário com os preços ATUAIS (só consulta; não altera nada). */

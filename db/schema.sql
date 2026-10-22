@@ -81,6 +81,9 @@ create index if not exists receipts_by_reservation on payment_receipts (reservat
 -- Telefone/WhatsApp do vizinho (opcional, só dígitos). Só o admin vê; usado no botão "Cobrar".
 alter table reservations add column if not exists phone text check (char_length(phone) <= 20);
 -- GO
+-- Taxa extra (ex.: estacionou sem agendar). Já está INCLUÍDA em total_cents; aqui só para mostrar separado.
+alter table reservations add column if not exists fee_cents int not null default 0 check (fee_cents >= 0);
+-- GO
 create table if not exists settings (key text primary key, value jsonb not null);
 -- GO
 insert into settings (key, value) values

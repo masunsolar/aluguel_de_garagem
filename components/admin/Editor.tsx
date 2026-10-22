@@ -7,17 +7,21 @@ import { api, ApiError, fmtDT, fromLocalInput, toLocalInput } from "@/lib/client
 import { shrink } from "@/lib/image";
 import { chargeMessage, waLink, waNumber } from "@/lib/whatsapp";
 
-export type Mode = { id?: string; kind?: "manual" | "bloqueio" };
+// "sem_agenda": alguém estacionou sem reservar no site. Já abre como irregular, entrada agora e taxa ligada.
+export type Mode = { id?: string; kind?: "manual" | "bloqueio" | "sem_agenda" };
+type Resident = { key: string; name: string; apartment: string | null; phone: string | null; carBrand: string | null; carModel: string | null;
+  carColor: string | null; plate: string | null; plates: string[]; uses: number; lastUse: string; pendingCents: number; pendingCount: number };
 const STATUSES = ["pendente", "confirmada", "em_andamento", "finalizada", "cancelada", "irregular", "bloqueada"];
 const inp = "mt-1 w-full rounded-lg border border-asfalto/20 bg-white px-3 py-2";
-const blank = { startAt: "", endAt: "", status: "confirmada", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", notes: "", total: "" };
+const blank = { startAt: "", endAt: "", status: "confirmada", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", notes: "", total: "", fee: "" };
+const cents = (v: string) => Math.round(Number(v || 0) * 100);
 
 function describe(e: any) {
   const d = e.details ?? {};
   if (e.action === "criada") return "Reserva criada pelo vizinho";
   if (e.action === "bloqueio_criado") return "Horário bloqueado pelo administrador";
   if (e.action === "foto_removida") return "Foto removida pelo administrador";
-  if (e.action === "criada_manualmente") return "Registro criado manualmente pelo administrador";
+  if (e.action === "criada_manualmente") return `Registro criado manualmente pelo administrador${d.taxa ? ` (inclui taxa de ${d.taxa})` : ""}`;
   if (e.action === "status_alterado") return `${d.from === "bloqueada" ? "Bloqueio removido" : d.to === "confirmada" ? "Confirmada" : d.to === "cancelada" ? "Cancelada" : d.to === "irregular" ? "Marcada como irregular" : `Status: ${d.to}`}${d.from ? ` (antes: ${d.from})` : ""}${Object.keys(d.changes ?? {}).length ? " • " + Object.entries<any>(d.changes).map(([k, v]) => `${k}: ${v.from ?? "—"} → ${v.to ?? "—"}`).join(" • ") : ""}`;
   if (e.action === "foto_adicionada") return "Foto adicionada pelo administrador";
   if (e.action === "cobranca_aberta") return `Cobrança aberta no WhatsApp (${d.itens ?? 1} reserva${(d.itens ?? 1) > 1 ? "s" : ""}, ${d.total ?? ""})`;
@@ -28,7 +32,9 @@ function describe(e: any) {
 }
 
 export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode; onClose: () => void; onSaved: () => void; onOpen: (id: string) => void }) {
-  const [f, setF] = useState({ ...blank, status: mode.kind === "bloqueio" ? "bloqueada" : "confirmada" });
+  const [f, setF] = useState({ ...blank, status: mode.kind === "bloqueio" ? "bloqueada" : mode.kind === "sem_agenda" ? "irregular" : "confirmada",
+    startAt: mode.kind === "sem_agenda" ? toLocalInput(new Date().toISOString()).slice(0, 14) + "00" : "" });
+  const [feeOn, setFeeOn] = useState(mode.kind === "sem_agenda"); const [residents, setResidents] = useState<Resident[]>([]); const [who, setWho] = useState(""); const [defaultFee, setDefaultFee] = useState("");
   const [detail, setDetail] = useState<any>(null); const [pixKey, setPixKey] = useState(""); const [chargeTpl, setChargeTpl] = useState("");
   const [priceMode, setPriceMode] = useState<"keep" | "recalc">("keep"); const [newQuote, setNewQuote] = useState<number | null>(null);
   const [err, setErr] = useState(""); const [conflicts, setConflicts] = useState<{ id: string; label: string }[]>([]); const [busy, setBusy] = useState(false);
@@ -38,13 +44,28 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
   const load = async () => {
     if (!mode.id) return;
     const d = await api(`/api/admin/reservations/${mode.id}`); setDetail(d);
-    setF({ startAt: toLocalInput(d.start_at), endAt: toLocalInput(d.end_at), status: d.status, name: d.name ?? "", apartment: d.apartment ?? "", carBrand: d.car_brand ?? "", carModel: d.car_model ?? "", carColor: d.car_color ?? "", plate: d.plate ?? "", phone: d.phone ?? "", notes: d.notes ?? "", total: (d.total_cents / 100).toFixed(2) });
+    const fee = d.fee_cents ?? 0; // o total gravado já inclui a taxa; no formulário uso e taxa ficam separados
+    setF({ startAt: toLocalInput(d.start_at), endAt: toLocalInput(d.end_at), status: d.status, name: d.name ?? "", apartment: d.apartment ?? "", carBrand: d.car_brand ?? "", carModel: d.car_model ?? "", carColor: d.car_color ?? "", plate: d.plate ?? "", phone: d.phone ?? "", notes: d.notes ?? "", total: ((d.total_cents - fee) / 100).toFixed(2), fee: fee ? (fee / 100).toFixed(2) : "" });
+    setFeeOn(fee > 0);
   };
   useEffect(() => { load().catch((e) => setErr(e.message)); }, []); // eslint-disable-line
-  useEffect(() => { if (mode.id) api("/api/admin/settings").then((c) => { setPixKey(c.pix?.key ?? ""); setChargeTpl(c.chargeTemplate ?? ""); }).catch(() => {}); }, []); // eslint-disable-line
+  useEffect(() => { api("/api/admin/settings").then((c) => {
+    setPixKey(c.pix?.key ?? ""); setChargeTpl(c.chargeTemplate ?? "");
+    const sug = Number(c.noBookingFee ?? 0).toFixed(2); setDefaultFee(sug); // taxa sugerida das Configurações
+    if (!mode.id) setF((p) => ({ ...p, fee: p.fee || sug }));
+  }).catch(() => {}); }, []); // eslint-disable-line
+  useEffect(() => { if (mode.kind !== "bloqueio") api("/api/admin/residents").then(setResidents).catch(() => {}); }, []); // eslint-disable-line
+  // Vincular a um morador que já usou: preenche os dados com os da última vez (dá para ajustar depois)
+  function pickResident(key: string) {
+    setWho(key); const r = residents.find((x) => x.key === key); if (!r) return;
+    setF((p) => ({ ...p, name: r.name, apartment: r.apartment ?? "", phone: r.phone ?? "", carBrand: r.carBrand ?? "", carModel: r.carModel ?? "", carColor: r.carColor ?? "", plate: r.plate ?? "" }));
+  }
+  const picked = residents.find((x) => x.key === who);
 
   const timesChanged = !!detail && !!f.startAt && !!f.endAt && (f.startAt !== toLocalInput(detail.start_at) || f.endAt !== toLocalInput(detail.end_at));
-  const valueEdited = !!detail && f.total !== "" && Math.round(Number(f.total) * 100) !== detail.total_cents;
+  const feeCents = feeOn ? cents(f.fee) : 0;
+  const valueEdited = !!detail && f.total !== "" && cents(f.total) !== detail.total_cents - (detail.fee_cents ?? 0);
+  const feeEdited = !!detail && feeCents !== (detail.fee_cents ?? 0);
   useEffect(() => { // cotação com os preços ATUAIS, só para informar; nada é gravado
     setNewQuote(null);
     if (!timesChanged || f.status === "bloqueada") return;
@@ -56,9 +77,10 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     setErr(""); setConflicts([]); setBusy(true);
     try {
       const body: any = { startAt: fromLocalInput(f.startAt), endAt: fromLocalInput(f.endAt), status: status ?? f.status, name: f.name, apartment: f.apartment, carBrand: f.carBrand, carModel: f.carModel, carColor: f.carColor, plate: f.plate, phone: f.phone, notes: f.notes };
-      if (mode.id && valueEdited) body.totalCents = Math.round(Number(f.total) * 100);
+      if (mode.id && valueEdited) body.totalCents = cents(f.total);
       if (mode.id && timesChanged && !valueEdited) body.priceMode = priceMode;
-      if (!mode.id && f.total !== "") body.totalCents = Math.round(Number(f.total) * 100);
+      if (!mode.id && f.total !== "") body.totalCents = cents(f.total);
+      if ((!mode.id && feeCents > 0) || feeEdited) body.feeCents = feeCents;
       if (paymentStatus) body.paymentStatus = paymentStatus;
       await api(mode.id ? `/api/admin/reservations/${mode.id}` : "/api/admin/reservations", mode.id ? "PATCH" : "POST", body);
       onSaved();
@@ -94,12 +116,27 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
       <div className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl">
         {/* Só o miolo rola; o rodapé fica fora da rolagem e nunca cobre o histórico (dvh = altura real no celular) */}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-5">
-          <h2 className="text-xl font-bold">{mode.id ? `Reserva #${mode.id.slice(0, 8).toUpperCase()}` : mode.kind === "bloqueio" ? "Bloquear garagem" : "Nova reserva manual"}</h2>
+          <h2 className="text-xl font-bold">{mode.id ? `Reserva #${mode.id.slice(0, 8).toUpperCase()}` : mode.kind === "bloqueio" ? "Bloquear garagem" : mode.kind === "sem_agenda" ? "Estacionou sem agendar" : "Nova reserva manual"}</h2>
+          {!block && residents.length > 0 && (
+            <label className="block rounded-xl bg-concreto p-3">Vincular a um morador que já usou
+              <select className={inp} value={who} onChange={(e) => pickResident(e.target.value)}>
+                <option value="">{mode.id ? "— manter os dados abaixo —" : "— escolher (preenche os dados) —"}</option>
+                {residents.map((r) => <option key={r.key} value={r.key}>{r.name}{r.apartment ? ` • Apto ${r.apartment}` : ""}{r.plates.length ? ` • ${r.plates.join(", ")}` : ""} — {r.uses}x, última {fmtDT(r.lastUse).slice(0, 5)}{r.pendingCount ? ` • ${r.pendingCount} em aberto (${brl(r.pendingCents)})` : ""}</option>)}
+              </select>
+              {picked && <span className="mt-1 block text-sm">{[picked.carBrand, picked.carModel, picked.carColor].filter(Boolean).join(" ")}{picked.phone ? ` • WhatsApp ${picked.phone}` : ""}{picked.pendingCount ? <b className="text-ocupado"> • já deve {brl(picked.pendingCents)} ({picked.pendingCount})</b> : ""}</span>}
+            </label>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <label className="col-span-2 sm:col-span-1">Entrada<input type="datetime-local" className={inp} value={f.startAt} onChange={set("startAt")} /></label>
             <label className="col-span-2 sm:col-span-1">Saída<input type="datetime-local" className={inp} value={f.endAt} onChange={set("endAt")} /></label>
             <label>Status gravado<select className={inp} value={f.status} onChange={set("status")}>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>{detail && effectiveStatus(detail) !== f.status && <span className="text-xs text-asfalto/60">Exibido como “{effectiveStatus(detail).replace("_", " ")}” (automático, pelo horário; nada é alterado no registro)</span>}</label>
-            {!block && <label>Valor cobrado (R$){mode.id ? "" : " — vazio = calcular"}<input type="number" step="0.01" className={inp} value={f.total} onChange={set("total")} /></label>}
+            {!block && <label>Valor do uso (R$){mode.id ? "" : " — vazio = calcular"}<input type="number" step="0.01" className={inp} value={f.total} onChange={set("total")} /></label>}
+            {!block && (
+              <div className="col-span-2 rounded-xl border border-asfalto/15 p-3">
+                <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={feeOn} onChange={(e) => { setFeeOn(e.target.checked); if (e.target.checked && !Number(f.fee)) setF((p) => ({ ...p, fee: defaultFee })); }} /> Taxa por estacionar sem agendar</label>
+                {feeOn && <label className="mt-2 block text-sm">Valor da taxa (R$) — somado ao uso e mostrado separado na cobrança<input type="number" step="0.01" min={0} className={inp + " max-w-40"} value={f.fee} onChange={set("fee")} /></label>}
+              </div>
+            )}
             {!block && <>
               <label>Responsável<input className={inp} value={f.name} onChange={set("name")} /></label>
               <label>Apartamento<input className={inp} value={f.apartment} onChange={set("apartment")} /></label>
@@ -112,12 +149,13 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
             <label className="col-span-2">{block ? "Motivo (não aparece para vizinhos)" : "Observações"}<textarea rows={2} className={inp} value={f.notes} onChange={set("notes")} /></label>
           </div>
 
-          {mode.id && detail && !timesChanged && !block && <PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents} className="rounded-xl bg-concreto p-3" />}
+          {mode.id && detail && !timesChanged && !block && <div className="rounded-xl bg-concreto p-3"><PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents - (detail.fee_cents ?? 0)} />
+            {detail.fee_cents > 0 && <p className="mt-1 text-sm">+ Taxa por estacionar sem agendar: <b>{brl(detail.fee_cents)}</b> • Total cobrado: <b>{brl(detail.total_cents)}</b></p>}</div>}
           {mode.id && detail && timesChanged && !valueEdited && !block && (
             <fieldset className="rounded-xl border border-faixa bg-faixa/10 p-3">
               <legend className="px-1 font-semibold">Horário alterado — e o valor?</legend>
-              <p className="text-sm">Valor contratado: <b>{brl(detail.total_cents)}</b>. {newQuote !== null ? <>O novo horário resultaria em <b>{brl(newQuote)}</b> com os preços atuais.</> : "Calculando…"}</p>
-              <label className="mt-1 block"><input type="radio" checked={priceMode === "keep"} onChange={() => setPriceMode("keep")} /> Manter valor atual ({brl(detail.total_cents)})</label>
+              <p className="text-sm">Valor do uso contratado: <b>{brl(detail.total_cents - (detail.fee_cents ?? 0))}</b>{detail.fee_cents > 0 ? ` (+ taxa ${brl(detail.fee_cents)}, que se mantém)` : ""}. {newQuote !== null ? <>O novo horário resultaria em <b>{brl(newQuote)}</b> com os preços atuais.</> : "Calculando…"}</p>
+              <label className="mt-1 block"><input type="radio" checked={priceMode === "keep"} onChange={() => setPriceMode("keep")} /> Manter valor atual ({brl(detail.total_cents - (detail.fee_cents ?? 0))})</label>
               <label className="block"><input type="radio" checked={priceMode === "recalc"} onChange={() => setPriceMode("recalc")} /> Recalcular valor{newQuote !== null ? ` (${brl(newQuote)})` : ""}</label>
             </fieldset>
           )}
@@ -133,7 +171,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
                       <button disabled={busy} onClick={() => save(undefined, "pago")} className="rounded-lg bg-livre px-3 py-1.5 text-sm font-semibold text-white">Marcar como pago</button>
                     </>}
                 </div>
-                {detail.payment_status !== "pago" && detail.charge?.length > 1 && <p className="mt-1 text-sm">Este apartamento tem <b>{detail.charge.length}</b> reservas em aberto; a cobrança inclui todas.</p>}
+                {detail.payment_status !== "pago" && detail.charge?.length > 1 && <p className="mt-1 text-sm">Esta pessoa tem <b>{detail.charge.length}</b> reservas em aberto (mesmo nome, placa ou apartamento); a cobrança inclui todas.</p>}
                 {detail.payment_status !== "pago" && detail.charge?.length > 0 && !waNumber(f.phone) && <p className="mt-1 text-xs text-asfalto/60">Sem WhatsApp válido cadastrado: o WhatsApp abre para você escolher o contato.</p>}
                 {detail.receipts.length === 0 ? <p className="mt-1 text-sm text-asfalto/60">Nenhum comprovante enviado pelo vizinho.</p> : (
                   <div className="mt-2 flex flex-wrap gap-2">{detail.receipts.map((c: any) => (
