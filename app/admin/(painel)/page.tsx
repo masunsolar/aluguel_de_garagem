@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Editor, { type Mode } from "@/components/admin/Editor";
 import Settings from "@/components/admin/Settings";
 import Agenda from "@/components/admin/Agenda";
+import Credits from "@/components/admin/Credits";
 import { MonthSummary, REVENUE, Today } from "@/components/admin/Summary";
 import { api, fmtDT } from "@/lib/client";
 import { brl } from "@/lib/pricing";
@@ -17,6 +18,9 @@ export default function Painel() {
   const [view, setView] = useState("todas"); const [pay, setPay] = useState("todos"); const [q, setQ] = useState("");
   const [monthlyCost, setMonthlyCost] = useState(200);
   const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [cfg, setCfg] = useState(false);
+  const [credOpen, setCredOpen] = useState(false); const [credPending, setCredPending] = useState(0); // pedidos de crédito aguardando
+  const loadCred = useCallback(() => api("/api/admin/creditos").then((c) => setCredPending(c.requests.filter((r: any) => r.status === "pendente").length)).catch(() => {}), []);
+  useEffect(() => { loadCred(); }, [loadCred]);
   const load = useCallback(() => api("/api/admin/reservations").then((r) => { setRows(r); setLoadErr(""); }).catch((e) => setLoadErr(e.message)), []);
   const loadCost = useCallback(() => api("/api/admin/settings").then((c) => setMonthlyCost(c.monthlyCost ?? 200)).catch(() => {}), []);
   useEffect(() => { load(); loadCost(); }, [load, loadCost]);
@@ -47,10 +51,13 @@ export default function Painel() {
             <a href="/api/admin/export?format=csv" className="block rounded-lg px-3 py-2 hover:bg-concreto">Planilha (.csv)<br /><span className="text-xs text-asfalto/60">só as reservas, abre no Excel</span></a>
           </div>
         </details>
+        <button onClick={() => setCredOpen(!credOpen)} className={`rounded-lg border px-4 py-2.5 ${credPending ? "border-faixa bg-faixa/20 font-semibold" : "border-asfalto/30"}`}>
+          Créditos{credPending > 0 && <span className="ml-1 rounded-full bg-faixa px-2 py-0.5 text-sm">{credPending}</span>}</button>
         <button onClick={() => setCfg(!cfg)} className="rounded-lg border border-asfalto/30 px-4 py-2.5">Configurações</button>
         <button onClick={async () => { await api("/api/admin/login", "DELETE"); location.href = "/admin/login"; }} className="px-3 py-2.5 underline">Sair</button>
       </header>
       {cfg && <Settings onSaved={loadCost} />}
+      {credOpen && <Credits onChanged={() => { load(); loadCred(); }} />}
       {rows && <Today rows={rows} onOpen={(id) => setMode({ id })} />}
       {rows && <MonthSummary rows={rows} monthlyCost={monthlyCost} />}
       {rows && <Agenda rows={rows} onOpen={(id) => setMode({ id })} />}

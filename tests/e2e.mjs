@@ -581,4 +581,71 @@ await test("CORRIDA: 4 pedidos simultâneos de \"usar crédito\" com saldo para 
   const rs = await Promise.all(ids.slice(0, 4).map((id) => call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "usar" } })));
   const used = rs.filter((r) => r.status === 200).reduce((t, r) => t + r.json.usedCents, 0); eq(used, 1500); // os outros: 400 "sem crédito" ou 0
   eq((await db.query("select coalesce(sum(u.amount_cents),0)::int s from credit_uses u join credits c on c.id=u.credit_id where c.name='Corrida Credito'")).rows[0].s, 1500); });
+
+// ================= PEDIDOS DE CRÉDITO (vizinho adiciona, admin confirma) =================
+const V = { name: "Vizinho Credito", apartment: "960", plate: "VCR1A23" };
+const VJ = {}; let reqV;
+const askCredit = (body, jar) => call("POST", "/api/creditos", { jar, body });
+const sendFile = (url, buf, jar, name = "c.jpg") => { const f = new FormData(); f.append("file", new Blob([buf]), name); return call("POST", url, { form: f, jar }); };
+const myCredit = async (jar) => (await call("GET", "/api/creditos", { jar })).json;
+await test("PEDIDO DE CRÉDITO: vizinho pede com comprovante; não vira saldo antes de confirmar; só o dono anexa/vê; validações", async () => {
+  await login(ADM);
+  for (const bad of [{ ...V, amountCents: 50 }, { ...V, apartment: "", amountCents: 6000 }, { ...V, amountCents: 6000, name: "<b>x</b>" }, { ...V, amountCents: 1.5 }])
+    eq((await askCredit(bad, {})).status, 400, JSON.stringify(bad));
+  const r = await askCredit({ ...V, amountCents: 6000, note: "PIX das 10h" }, VJ); eq(r.status, 201, r.text); reqV = r.json.id;
+  const m = await myCredit(VJ); eq(m.owner, null); eq(m.balanceCents, 0); eq(m.requests[0].status, "pendente"); eq(m.requests[0].amountCents, 6000);
+  assert.deepEqual(Object.keys(m.requests[0]).sort(), ["adminNote", "amountCents", "confirmedCents", "createdAt", "decidedAt", "id", "receiptCount", "status"]);
+  eq((await myCredit({})).requests.length, 0);
+  eq((await sendFile(`/api/creditos/${reqV}/comprovante`, JPEG(), {})).status, 404); // outro aparelho
+  eq((await sendFile(`/api/creditos/${reqV}/comprovante`, Buffer.from("lixo"), VJ)).status, 400);
+  eq((await sendFile(`/api/creditos/${reqV}/comprovante`, JPEG(), VJ)).status, 201);
+  eq((await myCredit(VJ)).requests[0].receiptCount, 1);
+  eq((await call("GET", "/api/admin/creditos")).status, 401);
+  const o = (await call("GET", "/api/admin/creditos", { jar: ADM })).json.requests.find((x) => x.id === reqV);
+  eq(o.status, "pendente"); eq(o.receipts.length, 1); eq(o.receipts[0].actor, "vizinho"); eq(o.note, "PIX das 10h");
+  eq((await call("GET", `/api/admin/credit-receipts/${o.receipts[0].id}`)).status, 401);
+  const f = await call("GET", `/api/admin/credit-receipts/${o.receipts[0].id}`, { jar: ADM }); eq(f.status, 200); eq(f.headers.get("content-type"), "image/jpeg"); });
+await test("CONFIRMAR: crédito com o valor recebido paga a pendência; a próxima reserva do aparelho já nasce paga; extrato do vizinho", async () => {
+  eq((await book(D(10), "19:00", D(10), "20:00", { jar: VJ, extra: V })).json.creditUsedCents, 0); // ainda nada confirmado
+  const pend = await idAt(D(10), "19:00");
+  eq((await call("POST", `/api/admin/creditos/pedidos/${reqV}`, { body: { action: "confirmar", amountCents: 5000 } })).status, 401);
+  const c = await call("POST", `/api/admin/creditos/pedidos/${reqV}`, { jar: ADM, body: { action: "confirmar", amountCents: 5000 } });
+  eq(c.status, 200, c.text); eq(c.json.usedCents, 1500); eq(c.json.creditLeftCents, 3500);
+  eq((await detail(pend)).payment_status, "pago");
+  const again = await call("POST", `/api/admin/creditos/pedidos/${reqV}`, { jar: ADM, body: { action: "confirmar", amountCents: 5000 } }); eq(again.status, 400);
+  eq((await db.query("select count(*)::int n from credits where request_id=$1", [reqV])).rows[0].n, 1);
+  const m = await myCredit(VJ); eq(m.owner.name, V.name); eq(m.balanceCents, 3500); eq(m.requests[0].status, "confirmado"); eq(m.requests[0].confirmedCents, 5000);
+  eq(m.movements[0].type, "entrada"); eq(m.movements[0].amountCents, 5000); eq(m.movements.at(-1).balanceCents, 3500);
+  const b = await book(D(11), "19:00", D(11), "20:00", { jar: VJ, extra: V }); eq(b.json.creditUsedCents, 1500); eq(b.json.paymentStatus, "pago");
+  eq((await myCredit(VJ)).balanceCents, 2000); eq(await credit(VJ), 2000);
+  eq((await sendFile(`/api/creditos/${reqV}/comprovante`, JPEG(), VJ)).status, 400); // já analisado
+  eq((await sendFile(`/api/admin/creditos/pedidos/${reqV}/comprovante`, JPEG(), ADM)).status, 201); // admin pode
+  eq((await sendFile(`/api/admin/creditos/pedidos/${reqV}/comprovante`, JPEG(), {})).status, 401); });
+await test("RECUSAR e CANCELAR: não criam crédito; vizinho vê o motivo; pedido decidido não muda", async () => {
+  const r1 = (await askCredit({ ...V, amountCents: 2000 }, VJ)).json.id;
+  eq((await call("POST", `/api/admin/creditos/pedidos/${r1}`, { jar: ADM, body: { action: "recusar", note: "PIX não caiu" } })).status, 200);
+  const m = (await myCredit(VJ)).requests.find((x) => x.id === r1); eq(m.status, "recusado"); eq(m.adminNote, "PIX não caiu");
+  eq((await call("DELETE", `/api/creditos/${r1}`, { jar: VJ })).status, 404);
+  eq((await call("POST", `/api/admin/creditos/pedidos/${r1}`, { jar: ADM, body: { action: "confirmar", amountCents: 2000 } })).status, 400);
+  const r2 = (await askCredit({ ...V, amountCents: 3000 }, VJ)).json.id;
+  eq((await call("DELETE", `/api/creditos/${r2}`, {})).status, 404); // outro aparelho
+  eq((await call("DELETE", `/api/creditos/${r2}`, { jar: VJ })).status, 200);
+  eq((await call("POST", `/api/admin/creditos/pedidos/${r2}`, { jar: ADM, body: { action: "confirmar", amountCents: 3000 } })).status, 400);
+  eq((await call("POST", `/api/admin/creditos/pedidos/${crypto.randomUUID()}`, { jar: ADM, body: { action: "recusar" } })).status, 404);
+  eq((await myCredit(VJ)).balanceCents, 2000); });
+await test("PAINEL DE CRÉDITOS: quem tem crédito com saldo e extrato; lançar crédito sem reserva com comprovante; admin anexa comprovante na reserva", async () => {
+  eq((await call("POST", "/api/admin/creditos", { jar: ADM, body: { name: "Sem Reserva", amountCents: 2500 } })).status, 400); // sem apto nem placa
+  const n = await call("POST", "/api/admin/creditos", { jar: ADM, body: { name: "Sem Reserva", apartment: "961", amountCents: 2500, note: "PIX avulso" } });
+  eq(n.status, 201, n.text); eq(n.json.creditLeftCents, 2500);
+  eq((await sendFile(`/api/admin/creditos/pedidos/${n.json.requestId}/comprovante`, JPEG(), ADM)).status, 201);
+  const o = (await call("GET", "/api/admin/creditos", { jar: ADM })).json;
+  const sr = o.people.find((p) => p.name === "Sem Reserva"); eq(sr.balanceCents, 2500); eq(sr.movements.length, 1);
+  const vc = o.people.find((p) => p.name === V.name); eq(vc.balanceCents, 2000); eq(vc.receivedCents, 5000);
+  assert.deepEqual(vc.movements.map((x) => x.type), ["entrada", "abatimento", "abatimento"]);
+  const lr = o.requests.find((x) => x.id === n.json.requestId); eq(lr.status, "confirmado"); eq(lr.source, "admin"); eq(lr.receipts[0].actor, "admin");
+  const rid = await idAt(D(11), "19:00");
+  eq((await sendFile(`/api/admin/reservations/${rid}/comprovante`, JPEG(), {})).status, 401);
+  eq((await sendFile(`/api/admin/reservations/${rid}/comprovante`, JPEG(), ADM)).status, 201);
+  const d = await detail(rid); eq(d.receipts.length, 1); assert.ok(d.events.some((e) => e.action === "comprovante_anexado"));
+  const b = (await call("GET", "/api/admin/export", { jar: ADM })).json; assert.ok(b.creditRequests.length >= 4); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);

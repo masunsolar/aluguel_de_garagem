@@ -24,16 +24,20 @@ const LOCK = q`select pg_advisory_xact_lock(727274)`;
 /** A reserva identifica o dono do crédito? Precisa do nome e do apartamento ou da placa (ver sameOwner). */
 export const identifies = (w: Who) => !!nameKey(w.name) && !!(plateKey(w.plate) || apartmentKey(w.apartment));
 
-export type Lot = { id: string; kind: "pagamento" | "manual"; amountCents: number; remainingCents: number; reservationId: string | null;
-  name: string | null; apartment: string | null; plate: string | null; note: string | null; createdAt: string };
+// kind: pagamento = sobra de um pagamento registrado numa reserva; manual = lançado pelo admin;
+// deposito = crédito que o vizinho adicionou (pedido confirmado pelo admin).
+export type Lot = { id: string; kind: "pagamento" | "manual" | "deposito"; amountCents: number; remainingCents: number; reservationId: string | null;
+  requestId: string | null; name: string | null; apartment: string | null; plate: string | null; note: string | null; createdAt: string };
 
-/** Lotes com saldo (de todo mundo). Poucas linhas: o filtro por pessoa é feito em JS (sameOwner). */
-async function openLots(): Promise<Lot[]> {
+const toLot = (r: any): Lot => ({ id: r.id, kind: r.kind, amountCents: r.amount_cents, remainingCents: r.remaining, reservationId: r.reservation_id ?? null,
+  requestId: r.request_id ?? null, name: r.name ?? null, apartment: r.apartment ?? null, plate: r.plate ?? null, note: r.note ?? null, createdAt: iso(r.created_at)! });
+async function allLots(): Promise<Lot[]> {
   const rows = await sql`select c.*, (c.amount_cents - coalesce((select sum(u.amount_cents) from credit_uses u where u.credit_id = c.id), 0))::int as remaining
     from credits c order by c.created_at, c.id`;
-  return rows.filter((r) => r.remaining > 0).map((r) => ({ id: r.id, kind: r.kind, amountCents: r.amount_cents, remainingCents: r.remaining,
-    reservationId: r.reservation_id ?? null, name: r.name ?? null, apartment: r.apartment ?? null, plate: r.plate ?? null, note: r.note ?? null, createdAt: iso(r.created_at)! }));
+  return rows.map(toLot);
 }
+/** Lotes com saldo (de todo mundo). Poucas linhas: o filtro por pessoa é feito em JS (sameOwner). */
+async function openLots(): Promise<Lot[]> { return (await allLots()).filter((l) => l.remainingCents > 0); }
 /** `all` opcional: para várias pessoas de uma vez, passe o resultado de `openLots()` e evite N consultas. */
 export async function lotsFor(who: Who, all?: Lot[]): Promise<Lot[]> {
   if (!identifies(who)) return [];
@@ -169,17 +173,28 @@ export async function registerPayment(rid: string, receivedCents: number, note?:
   return { paid: !!rows[0]?.paid, usedHereCents: usedHere, otherReservationsCents: spread, creditLeftCents: await balanceFor(r as Who) };
 }
 
-/** Admin lança um crédito avulso para a pessoa desta reserva (ex.: PIX recebido sem reserva). Já abate as pendências dela. */
+/**
+ * Admin lança crédito para uma pessoa (ex.: PIX recebido sem reserva). Também cria um pedido já confirmado, para
+ * dar para anexar o comprovante. Já abate as pendências dela. `rid` = reserva de onde foi lançado (opcional).
+ */
+export async function createAdminCredit(who: Who, amountCents: number, note?: string | null, rid?: string | null) {
+  if (!identifies(who)) throw new UserError("Para lançar crédito, informe o nome e o apartamento ou a placa de quem pagou.");
+  const reqId = randomUUID();
+  const details = JSON.stringify({ valor_cents: amountCents, pedido: reqId, ...(note && { obs: note }) });
+  await sql`with q as (insert into credit_requests (id, amount_cents, status, source, name, apartment, plate, note, decided_at)
+      values (${reqId}::uuid, ${amountCents}, 'confirmado', 'admin', ${who.name}, ${who.apartment || null}, ${who.plate || null}, ${note ?? null}, now()) returning id),
+    c as (insert into credits (amount_cents, kind, reservation_id, request_id, name, apartment, plate, note)
+      select ${amountCents}, 'manual', ${rid ?? null}::uuid, q.id, ${who.name}, ${who.apartment || null}, ${who.plate || null}, ${note ?? null} from q returning id)
+    insert into reservation_events (reservation_id, actor, action, details) select ${rid ?? null}::uuid, 'admin', 'credito_lancado', ${details}::jsonb from c`;
+  const used = await autoApply(who, "admin");
+  return { requestId: reqId, usedCents: used, creditLeftCents: await balanceFor(who) };
+}
+/** Lançar crédito a partir do editor de uma reserva: a pessoa é a da reserva. */
 export async function addManualCredit(rid: string, amountCents: number, note?: string | null) {
   const r = await reservationForCredit(rid);
   if (!r) return null;
   if (r.status === "bloqueada" || !identifies(r as Who)) throw new UserError("Para lançar crédito, a reserva precisa ter o nome e o apartamento ou a placa de quem pagou.");
-  const details = JSON.stringify({ valor_cents: amountCents, ...(note && { obs: note }) });
-  await sql`with c as (insert into credits (amount_cents, kind, reservation_id, name, apartment, plate, note)
-      values (${amountCents}, 'manual', ${rid}::uuid, ${r.name ?? null}, ${r.apartment ?? null}, ${r.plate ?? null}, ${note ?? null}) returning id)
-    insert into reservation_events (reservation_id, actor, action, details) select ${rid}::uuid, 'admin', 'credito_lancado', ${details}::jsonb from c`;
-  const used = await autoApply(r as Who, "admin");
-  return { usedCents: used, creditLeftCents: await balanceFor(r as Who) };
+  return createAdminCredit(r as Who, amountCents, note, rid);
 }
 
 /** Admin usa o crédito da pessoa NESTA reserva (mesmo com comprovante enviado). */
@@ -218,22 +233,72 @@ export async function creditInfo(rid: string, who: Who) {
 }
 
 /**
- * Reservas JÁ PAGAS deste aparelho (cookie assinado), mais recentes primeiro. Pago = o admin confirmou dinheiro
- * dessa pessoa vindo deste aparelho. Quem só digitou os dados de outro vizinho não tem reserva paga, então não
- * vê nem usa o crédito dele.
+ * Pessoas que COMPROVADAMENTE usam este aparelho (cookie assinado), mais recentes primeiro: as de reservas já pagas
+ * e as de pedidos de crédito já confirmados pelo admin. Quem só digitou os dados de outro vizinho não tem nada
+ * disso, então não vê nem usa o crédito dele.
  */
-async function paidInSession(sessionIds: string[]): Promise<Who[]> {
-  const ids = sessionIds.filter((i) => /^[0-9a-f-]{36}$/i.test(i));
-  if (!ids.length) return [];
-  return (await sql`select name, apartment, plate from reservations where id::text = any(string_to_array(${ids.join(",")}, ','))
-    and deleted_at is null and payment_status = 'pago' order by created_at desc`) as Who[];
+async function trustedInSession(sessionIds: string[], requestIds: string[] = []): Promise<Who[]> {
+  const ok = (l: string[]) => l.filter((i) => /^[0-9a-f-]{36}$/i.test(i)).join(",");
+  const ids = ok(sessionIds), crs = ok(requestIds);
+  if (!ids && !crs) return [];
+  return (await sql`select name, apartment, plate, at from (
+      select name, apartment, plate, created_at as at from reservations where id::text = any(string_to_array(${ids}, ','))
+        and deleted_at is null and payment_status = 'pago'
+      union all
+      select name, apartment, plate, decided_at as at from credit_requests where id::text = any(string_to_array(${crs}, ','))
+        and status = 'confirmado') x order by at desc`) as Who[];
 }
-/** A reserva nova (dados digitados) é de alguém que já pagou por este aparelho? Só então o crédito abate sozinho. */
-export async function sessionIsPerson(sessionIds: string[], who: Who): Promise<boolean> {
-  return identifies(who) && (await paidInSession(sessionIds)).some((r) => sameOwner(r, who));
+/** A reserva nova (dados digitados) é de alguém confirmado neste aparelho? Só então o crédito abate sozinho. */
+export async function sessionIsPerson(sessionIds: string[], who: Who, requestIds: string[] = []): Promise<boolean> {
+  return identifies(who) && (await trustedInSession(sessionIds, requestIds)).some((r) => sameOwner(r, who));
 }
-/** Saldo mostrado ao vizinho: o da pessoa da reserva paga mais recente deste aparelho (0 se não houver). */
-export async function sessionBalance(sessionIds: string[]): Promise<number> {
-  const [r] = await paidInSession(sessionIds);
-  return r ? balanceFor(r) : 0;
+/** Dono do crédito mostrado ao vizinho: a pessoa confirmada mais recente deste aparelho (null se não houver). */
+export async function sessionOwner(sessionIds: string[], requestIds: string[] = []): Promise<Who | null> {
+  return (await trustedInSession(sessionIds, requestIds)).find(identifies) ?? null;
+}
+export async function sessionBalance(sessionIds: string[], requestIds: string[] = []): Promise<number> {
+  const w = await sessionOwner(sessionIds, requestIds);
+  return w ? balanceFor(w) : 0;
+}
+
+// ----- Extrato -----
+export type Movement = { at: string; amountCents: number; balanceCents: number; type: "entrada" | "abatimento" | "devolucao" | "baixa";
+  label: string; creditId: string; reservation: { id: string; start: string; end: string } | null };
+const ENTRY: Record<Lot["kind"], string> = { deposito: "Crédito adicionado (pedido confirmado)", manual: "Crédito lançado pelo administrador", pagamento: "Pagamento recebido" };
+
+/** Movimentos de um conjunto de lotes, em ordem, com o saldo depois de cada um. Do ponto de vista da pessoa: + entra, − sai. */
+async function movementsOf(lots: Lot[]): Promise<Movement[]> {
+  if (!lots.length) return [];
+  const uses = await sql`select u.credit_id, u.amount_cents, u.reason, u.created_at, u.id, r.id as rid, r.start_at, r.end_at
+    from credit_uses u left join reservations r on r.id = u.reservation_id
+    where u.credit_id::text = any(string_to_array(${lots.map((l) => l.id).join(",")}, ',')) order by u.id`;
+  const m: (Omit<Movement, "balanceCents"> & { k: string })[] = lots.map((l) => ({ at: l.createdAt, amountCents: l.amountCents, type: "entrada",
+    label: ENTRY[l.kind] + (l.note ? ` • ${l.note}` : ""), creditId: l.id, reservation: null, k: `${l.createdAt}#0#${l.id}` }));
+  for (const u of uses) {
+    const at = iso(u.created_at)!, res = u.rid ? { id: u.rid as string, start: iso(u.start_at)!, end: iso(u.end_at)! } : null;
+    const type = u.reason === "abatimento" ? "abatimento" : u.reason === "devolucao" ? "devolucao" : "baixa";
+    m.push({ at, amountCents: -u.amount_cents, type, creditId: u.credit_id, reservation: res, k: `${at}#1#${String(u.id).padStart(12, "0")}`,
+      label: type === "abatimento" ? "Usado numa reserva" : type === "devolucao" ? "Devolvido (reserva cancelada ou alterada)" : "Baixa pelo administrador" });
+  }
+  m.sort((a, b) => a.k.localeCompare(b.k));
+  let bal = 0;
+  return m.map(({ k, ...x }) => ({ ...x, balanceCents: (bal += x.amountCents) }));
+}
+export async function ledgerFor(who: Who): Promise<Movement[]> {
+  if (!identifies(who)) return [];
+  return movementsOf((await allLots()).filter((l) => sameOwner(who, l)));
+}
+
+/** Para o painel: cada pessoa que já teve crédito (agrupada pela regra de dono), com saldo, lotes e extrato. */
+export async function creditPeople() {
+  const lots = await allLots();
+  const groups: { who: Who; lots: Lot[] }[] = [];
+  for (const l of [...lots].reverse()) { // do mais recente: o nome/apto/placa exibido é o último usado
+    const g = groups.find((x) => sameOwner(x.who, l));
+    if (g) g.lots.push(l); else groups.push({ who: { name: l.name, apartment: l.apartment, plate: l.plate }, lots: [l] });
+  }
+  const people = await Promise.all(groups.map(async (g) => ({ name: g.who.name, apartment: g.who.apartment, plate: g.who.plate,
+    balanceCents: sumLots(g.lots), receivedCents: g.lots.reduce((t, l) => t + l.amountCents, 0),
+    lots: g.lots.filter((l) => l.remainingCents > 0).reverse(), movements: await movementsOf(g.lots.reverse()) })));
+  return people.sort((a, b) => b.balanceCents - a.balanceCents || (a.name ?? "").localeCompare(b.name ?? ""));
 }

@@ -38,7 +38,8 @@ export async function GET(req: Request) {
   // crédito: lotes (dinheiro recebido) e usos (abatimentos, devoluções e baixas)
   const credits = (await sql`select * from credits order by created_at, id`).map((c) => ({ ...c, created_at: iso(c.created_at) }));
   const creditUses = (await sql`select * from credit_uses order by id`).map((u) => ({ ...u, created_at: iso(u.created_at) }));
+  const creditRequests = (await sql`select * from credit_requests order by created_at`).map((r) => ({ ...r, created_at: iso(r.created_at), updated_at: iso(r.updated_at), decided_at: iso(r.decided_at) }));
   const settings = Object.fromEntries((await sql`select key, value from settings where key <> 'admin_epoch' order by key`).map((s) => [s.key, json(s.value)]));
-  const body = JSON.stringify({ exportedAt: new Date().toISOString(), reservations, events, credits, creditUses, settings }, null, 2);
+  const body = JSON.stringify({ exportedAt: new Date().toISOString(), reservations, events, credits, creditUses, creditRequests, settings }, null, 2);
   return new Response(body, { headers: headers("application/json; charset=utf-8", "json") });
 }

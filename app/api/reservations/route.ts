@@ -1,6 +1,6 @@
 import { reservationSchema } from "@/lib/validation";
 import { createPublic } from "@/lib/services/public";
-import { neighborIds, rememberReservation } from "@/lib/auth";
+import { neighborCreditIds, neighborIds, rememberReservation } from "@/lib/auth";
 import { limited, tooMany } from "@/lib/ratelimit";
 import { fail } from "@/lib/errors";
 
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   const p = reservationSchema.safeParse(body);
   if (!p.success) return Response.json({ error: p.error.issues[0]?.message ?? "Dados inválidos." }, { status: 400 });
   try {
-    const r = await createPublic(p.data, await neighborIds());
+    const r = await createPublic(p.data, await neighborIds(), await neighborCreditIds());
     await rememberReservation(r.id); // este navegador passa a "ser dono" da reserva
     return Response.json({ id: r.shortId, code: r.code, start: r.start, end: r.end, totalCents: r.totalCents, breakdown: r.breakdown, creditUsedCents: r.creditUsedCents, paymentStatus: r.paymentStatus }, { status: 201 });
   } catch (e) { return fail(e); }

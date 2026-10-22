@@ -10,3 +10,13 @@ export const privateFileHeaders = (mime: string) => ({
   "Content-Type": mime, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
   "Content-Disposition": "inline", "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
 });
+
+/** Lê o comprovante enviado (campo "file"): imagem JPG/PNG ou PDF de até 2 MB, conferido pelo conteúdo. */
+export async function readReceiptUpload(req: Request): Promise<{ bytes: Buffer; mime: string } | Response> {
+  const file = (await req.formData().catch(() => null))?.get("file");
+  if (!(file instanceof File) || file.size > 2_000_000) return Response.json({ error: "Envie uma imagem ou PDF de até 2 MB." }, { status: 400 });
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const mime = sniff(bytes);
+  if (!mime) return Response.json({ error: "Envie uma imagem (JPG/PNG) ou PDF." }, { status: 400 });
+  return { bytes, mime };
+}

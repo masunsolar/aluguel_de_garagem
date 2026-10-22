@@ -23,7 +23,7 @@ export async function getBusy() {
 
 const DAY = 86_400_000;
 /** `sessionIds` = reservas que este navegador já tem (cookie assinado): decide se o crédito da pessoa pode ser usado sozinho. */
-export async function createPublic(i: z.infer<typeof reservationSchema>, sessionIds: string[] = []) {
+export async function createPublic(i: z.infer<typeof reservationSchema>, sessionIds: string[] = [], requestIds: string[] = []) {
   const start = toDate(i.startDate, i.startTime), end = toDate(i.endDate, i.endTime), now = Date.now();
   if (Number.isNaN(+start) || Number.isNaN(+end)) throw new UserError("Data ou horário inválido.");
   if (end <= start) throw new UserError("A saída precisa ser depois da entrada.");
@@ -52,7 +52,7 @@ export async function createPublic(i: z.infer<typeof reservationSchema>, session
     // Crédito (pagou a mais antes) abate sozinho só se ESTE aparelho já tem reserva com o mesmo nome:
     // assim ninguém usa o crédito do vizinho só digitando o apartamento dele. Senão, o admin usa pelo painel.
     let creditUsedCents = 0, paymentStatus = "pendente";
-    if (await sessionIsPerson(sessionIds, i)) {
+    if (await sessionIsPerson(sessionIds, i, requestIds)) {
       await autoApply(i, "sistema");
       const [x] = await sql`select payment_status, coalesce((select sum(u.amount_cents) from credit_uses u where u.reservation_id = reservations.id), 0)::int as credit
         from reservations where id = ${id}`;

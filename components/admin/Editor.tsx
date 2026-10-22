@@ -4,7 +4,7 @@ import { brl } from "@/lib/pricing";
 import { effectiveStatus } from "@/lib/status";
 import PriceBreakdown from "../PriceBreakdown";
 import { api, ApiError, fmtDT, fromLocalInput, toLocalInput } from "@/lib/client";
-import { shrink } from "@/lib/image";
+import { prepareReceipt, shrink } from "@/lib/image";
 import { chargeMessage, waLink, waNumber } from "@/lib/whatsapp";
 
 // "sem_agenda": alguém estacionou sem reservar no site. Já abre como irregular, entrada agora e taxa ligada.
@@ -26,6 +26,7 @@ function describe(e: any) {
   if (e.action === "foto_adicionada") return "Foto adicionada pelo administrador";
   if (e.action === "cobranca_aberta") return `Cobrança aberta no WhatsApp (${d.itens ?? 1} reserva${(d.itens ?? 1) > 1 ? "s" : ""}, ${d.total ?? ""})`;
   if (e.action === "comprovante_enviado") return "Comprovante de pagamento enviado pelo vizinho";
+  if (e.action === "comprovante_anexado") return "Comprovante de pagamento anexado pelo administrador";
   if (e.action === "excluida") return "Excluída pelo administrador";
   if (e.action === "pagamento_registrado") return `Pagamento registrado: recebido ${brl(d.recebido_cents)} (faltavam ${brl(d.devido_cents)})${d.obs ? ` • ${d.obs}` : ""}`;
   if (e.action === "credito_usado") return `Crédito abatido: ${brl(d.valor_cents)}${d.quitou ? " (quitou a reserva)" : ""}`;
@@ -95,9 +96,9 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     } catch (e) { setErr((e as Error).message); setConflicts(e instanceof ApiError ? e.conflicts : []); } finally { setBusy(false); }
   }
   // Pagamento com valor e crédito: o editor continua aberto mostrando o resultado (a lista recarrega ao fechar).
-  async function creditCall(url: string, body: unknown, done: (r: any) => string) {
+  async function creditCall(url: string, body: unknown, done: (r: any) => string, custom?: () => Promise<string>) {
     setErr(""); setInfo(""); setBusy(true);
-    try { const r = await api(url, "POST", body); setInfo(done(r)); setDirty(true); await load(); }
+    try { setInfo(custom ? await custom() : done(await api(url, "POST", body))); setDirty(true); await load(); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
   const registerPay = () => creditCall(`/api/admin/reservations/${mode.id}/pagamento`, { receivedCents: cents(recv) }, (r) =>
@@ -113,6 +114,17 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     const note = prompt(`Zerar o saldo de ${brl(lot.remainingCents)} deste crédito? Use quando o dinheiro foi devolvido ao vizinho ou lançado por engano.\n\nMotivo (opcional):`);
     if (note === null) return;
     creditCall(`/api/admin/creditos/${lot.id}/baixa`, { note: note.trim() || null }, (r) => `Baixa de ${brl(r.removedCents)} registrada.`);
+  }
+
+  async function attachReceipt(file?: File) {
+    if (!file || !mode.id) return;
+    await creditCall("", null, () => "", async () => {
+      const { blob, name } = await prepareReceipt(file);
+      const fd = new FormData(); fd.append("file", blob, name);
+      const r = await fetch(`/api/admin/reservations/${mode.id}/comprovante`, { method: "POST", body: fd });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Não foi possível anexar o comprovante.");
+      return "Comprovante anexado.";
+    });
   }
 
   async function remove() {
@@ -211,7 +223,8 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
                 )}
                 {detail.payment_status !== "pago" && detail.charge?.length > 1 && <p className="mt-1 text-sm">Esta pessoa tem <b>{detail.charge.length}</b> reservas em aberto (mesmo nome, placa ou apartamento); a cobrança inclui todas.</p>}
                 {detail.payment_status !== "pago" && detail.charge?.length > 0 && !waNumber(f.phone) && <p className="mt-1 text-xs text-asfalto/60">Sem WhatsApp válido cadastrado: o WhatsApp abre para você escolher o contato.</p>}
-                {detail.receipts.length === 0 ? <p className="mt-1 text-sm text-asfalto/60">Nenhum comprovante enviado pelo vizinho.</p> : (
+                <label className="mt-2 inline-block cursor-pointer text-sm underline">Anexar comprovante<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => { attachReceipt(e.target.files?.[0]); e.target.value = ""; }} /></label>
+                {detail.receipts.length === 0 ? <p className="mt-1 text-sm text-asfalto/60">Nenhum comprovante anexado.</p> : (
                   <div className="mt-2 flex flex-wrap gap-2">{detail.receipts.map((c: any) => (
                     <a key={c.id} href={`/api/admin/receipts/${c.id}`} target="_blank" className="block w-24 text-center text-xs underline">
                       {c.mime === "application/pdf" ? <div className="flex aspect-square items-center justify-center rounded-lg bg-white text-2xl">📄</div> : <img src={`/api/admin/receipts/${c.id}`} alt="Comprovante" className="aspect-square w-full rounded-lg object-cover" />}
