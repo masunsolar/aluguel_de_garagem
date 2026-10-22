@@ -10,6 +10,8 @@ import { adminCreateSchema, adminPatchSchema } from "../validation";
 import { openUsedRows, unpaidUsedFor, type ChargeRow } from "./debts";
 import { nameKey, plateKey } from "../identity";
 import { apartmentKey } from "../apartment";
+import { autoApply, creditInfo, lotsFor, openLots, reconcile, settle, sumLots } from "./credit";
+import type { Who } from "../identity";
 
 const FIELDS = {
   startAt: ["start_at", "entrada"], endAt: ["end_at", "saída"], status: ["status", "status"], name: ["name", "responsável"],
@@ -35,13 +37,15 @@ async function clash(e: any, start: Date, end: Date, selfId: string | null): Pro
 
 export async function listAll() {
   const rows = await sql`select r.*, (select count(*)::int from reservation_photos p where p.reservation_id = r.id) as photo_count,
-    (select count(*)::int from payment_receipts c where c.reservation_id = r.id) as receipt_count
+    (select count(*)::int from payment_receipts c where c.reservation_id = r.id) as receipt_count,
+    coalesce((select sum(u.amount_cents) from credit_uses u where u.reservation_id = r.id), 0)::int as credit_cents
     from reservations r where r.deleted_at is null order by r.start_at desc`;
   return rows.map(strip);
 }
 
 export async function getDetail(id: string) {
-  const [r] = await sql`select * from reservations where id = ${id} and deleted_at is null`;
+  const [r] = await sql`select *, coalesce((select sum(u.amount_cents) from credit_uses u where u.reservation_id = reservations.id), 0)::int as credit_cents
+    from reservations where id = ${id} and deleted_at is null`;
   if (!r) return null;
   const events = await sql`select actor, action, details, created_at from reservation_events where reservation_id = ${id} order by created_at, id`;
   const photos = await sql`select id from reservation_photos where reservation_id = ${id} order by created_at`;
@@ -49,10 +53,11 @@ export async function getDetail(id: string) {
   // Para o botão "Cobrar": pendências já usadas do mesmo apartamento + esta reserva (mesmo que futura), se estiver em aberto
   const row = strip(r);
   const charge: ChargeRow[] = row.status === "bloqueada" ? [] : await unpaidUsedFor({ name: r.name, apartment: r.apartment, plate: r.plate });
-  if (row.payment_status === "pendente" && !["cancelada", "bloqueada"].includes(row.status) && row.total_cents > 0 && !charge.some((c) => c.id === id))
-    charge.push({ id, start_at: row.start_at, end_at: row.end_at, total_cents: row.total_cents, fee_cents: row.fee_cents ?? 0 });
+  if (row.payment_status === "pendente" && !["cancelada", "bloqueada"].includes(row.status) && row.total_cents > row.credit_cents && !charge.some((c) => c.id === id))
+    charge.push({ id, start_at: row.start_at, end_at: row.end_at, total_cents: row.total_cents, fee_cents: row.fee_cents ?? 0, credit_cents: row.credit_cents });
   charge.sort((a, b) => a.start_at.localeCompare(b.start_at));
-  return { ...row, charge, events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
+  const credit = row.status === "bloqueada" ? null : await creditInfo(id, r as Who);
+  return { ...row, charge, credit, events: events.map((e) => ({ ...e, details: json(e.details), created_at: iso(e.created_at) })), photos: photos.map((p) => p.id as string),
     receipts: receipts.map((c) => ({ id: c.id as string, mime: c.mime as string, created_at: iso(c.created_at) })) };
 }
 
@@ -74,6 +79,8 @@ export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
                 ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}, ${i.phone || null}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
+    // crédito que a pessoa já tem paga este registro (ex.: estacionou sem agendar e já tinha deixado dinheiro)
+    if (i.status !== "bloqueada" && pay === "pendente") await autoApply({ name: i.name, apartment: i.apartment, plate: i.plate }, "admin");
     return r[0].id as string;
   } catch (e) { return clash(e, start, end, null); }
 }
@@ -126,13 +133,19 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
         where id = ${id} and deleted_at is null returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from u
       returning reservation_id`;
-    return r.length > 0;
+    if (!r.length) return false;
   } catch (err) { return clash(err, s, e, id); }
+  // Crédito: "voltar para pendente" devolve todo o crédito abatido (é desfazer o pagamento) e não reaplica.
+  // Nos demais casos devolve o que a reserva não pode mais segurar (cancelou, valor diminuiu) e reaplica nas pendências.
+  if (cur.payment_status === "pago" && next.payment_status === "pendente") await settle(id, "admin", true);
+  else { await settle(id, "admin"); await autoApply({ name: next.name, apartment: next.apartment, plate: next.plate }, "admin"); }
+  return true;
 }
 
 export async function softDelete(id: string) {
   const r = await sql`with u as (update reservations set deleted_at = now(), updated_at = now() where id = ${id} and deleted_at is null returning id)
     insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', 'excluida', '{}'::jsonb from u returning reservation_id`;
+  if (r.length) await reconcile(id, "admin"); // crédito abatido nela volta para a pessoa
   return r.length > 0;
 }
 
@@ -166,14 +179,14 @@ export async function listResidents() {
     from reservations r where r.deleted_at is null and r.status not in ('bloqueada','cancelada') and coalesce(trim(r.name), '') <> ''
     order by r.start_at desc`;
   type Resident = { key: string; name: string; apartment: string | null; phone: string | null; carBrand: string | null; carModel: string | null;
-    carColor: string | null; plate: string | null; plates: string[]; uses: number; lastUse: string; pendingCents: number; pendingCount: number };
+    carColor: string | null; plate: string | null; plates: string[]; uses: number; lastUse: string; pendingCents: number; pendingCount: number; creditCents: number };
   const byKey = new Map<string, Resident>();
   for (const r of rows) {
     const key = `${nameKey(r.name)}|${apartmentKey(r.apartment)}`;
     if (key.startsWith("|")) continue; // nome curto demais para identificar alguém
     let p = byKey.get(key);
     if (!p) byKey.set(key, p = { key, name: r.name, apartment: r.apartment, phone: r.phone, carBrand: r.car_brand, carModel: r.car_model,
-      carColor: r.car_color, plate: r.plate, plates: [], uses: 0, lastUse: iso(r.start_at)!, pendingCents: 0, pendingCount: 0 });
+      carColor: r.car_color, plate: r.plate, plates: [], uses: 0, lastUse: iso(r.start_at)!, pendingCents: 0, pendingCount: 0, creditCents: 0 });
     p.phone ??= r.phone; p.carBrand ??= r.car_brand; p.carModel ??= r.car_model; p.carColor ??= r.car_color; p.plate ??= r.plate; p.apartment ??= r.apartment;
     const pk = plateKey(r.plate); if (pk && !p.plates.includes(pk)) p.plates.push(pk);
     p.uses++;
@@ -181,7 +194,9 @@ export async function listResidents() {
   const list = [...byKey.values()];
   const open = await openUsedRows();
   const debts = await Promise.all(list.map((p) => unpaidUsedFor({ name: p.name, apartment: p.apartment, plate: p.plate }, open)));
-  list.forEach((p, i) => { p.pendingCount = debts[i].length; p.pendingCents = debts[i].reduce((t, d) => t + d.total_cents, 0); });
+  const lots = await openLots();
+  const credits = await Promise.all(list.map((p) => lotsFor({ name: p.name, apartment: p.apartment, plate: p.plate }, lots)));
+  list.forEach((p, i) => { p.pendingCount = debts[i].length; p.pendingCents = debts[i].reduce((t, d) => t + d.total_cents - d.credit_cents, 0); p.creditCents = sumLots(credits[i]); });
   return list.sort((a, b) => b.lastUse.localeCompare(a.lastUse));
 }
 
@@ -202,7 +217,7 @@ export async function logCharge(id: string) {
   if (!d) return null;
   const items: ChargeRow[] = d.charge;
   if (!items.length) return 0;
-  const details = JSON.stringify({ itens: items.length, total: brl(items.reduce((s, i) => s + i.total_cents, 0)), telefone: d.phone ?? null });
+  const details = JSON.stringify({ itens: items.length, total: brl(items.reduce((s, i) => s + i.total_cents - (i.credit_cents ?? 0), 0)), telefone: d.phone ?? null });
   const r = await sql`insert into reservation_events (reservation_id, actor, action, details)
     select x::uuid, 'admin', 'cobranca_aberta', ${details}::jsonb from unnest(string_to_array(${items.map((i) => i.id).join(",")}, ',')) as x
     returning reservation_id`;

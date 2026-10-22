@@ -28,7 +28,7 @@ export default function Booking() {
   const [day, setDay] = useState(today);
   const [open, setOpen] = useState(false);
   const [ver, setVer] = useState(0);
-  const [done, setDone] = useState<{ id: string; code: string; start: string; end: string; totalCents: number; breakdown: Breakdown | null } | null>(null);
+  const [done, setDone] = useState<{ id: string; code: string; start: string; end: string; totalCents: number; breakdown: Breakdown | null; creditUsedCents?: number; paymentStatus?: string } | null>(null);
 
   const load = () => fetch("/api/availability").then((r) => (r.ok ? r.json() : Promise.reject())).then((b) => { setBusy(b); setLoadErr(false); }).catch(() => setLoadErr(true));
   useEffect(() => {
@@ -47,12 +47,17 @@ export default function Booking() {
         <div>Entrada: {new Date(done.start).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}</div>
         <div>Saída: {new Date(done.end).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}</div>
         <div>Valor: <b>{brl(done.totalCents)}</b></div>
+        {!!done.creditUsedCents && <div className="text-livre">Crédito usado: <b>− {brl(done.creditUsedCents)}</b> • A pagar: <b>{brl(done.totalCents - done.creditUsedCents)}</b></div>}
         <PriceBreakdown breakdown={done.breakdown} className="mt-2 rounded-lg bg-concreto p-3" />
         <div>Identificador: <b>{done.id}</b></div>
         <div className="mt-2 rounded-lg bg-concreto p-3 text-sm">Código para acompanhar em outro aparelho: <b className="select-all">{done.code}</b><br />Guarde-o: ele não será mostrado de novo.</div>
       </dl>
-      <PixBox pix={pix} totalCents={done.totalCents} />
-      <p className="mt-3 rounded-lg bg-faixa/20 p-3 text-sm">Pagamento <b>pendente</b>. Depois de pagar, envie o comprovante em <b>“Minhas reservas”</b> (foto da tela ou PDF).</p>
+      {done.paymentStatus === "pago"
+        ? <p className="mt-3 rounded-lg bg-livre/10 p-3 text-sm">Pagamento <b>confirmado com o seu crédito</b>. Não precisa pagar nada agora.</p>
+        : <>
+          <PixBox pix={pix} totalCents={done.totalCents - (done.creditUsedCents ?? 0)} />
+          <p className="mt-3 rounded-lg bg-faixa/20 p-3 text-sm">Pagamento <b>pendente</b>. Depois de pagar, envie o comprovante em <b>“Minhas reservas”</b> (foto da tela ou PDF).</p>
+        </>}
       <button className="mt-5 rounded-lg bg-asfalto px-4 py-2.5 text-white" onClick={() => { setDone(null); setOpen(false); setVer((v) => v + 1); load(); }}>Voltar</button>
     </div>
   );
@@ -101,6 +106,8 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
   const [remember, setRemember] = useState(true); const [prefilled, setPrefilled] = useState(!!saved);
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
+  const [credit, setCredit] = useState(0); // crédito de quem usa este aparelho; o servidor decide quanto abate de verdade
+  useEffect(() => { fetch("/api/minhas-reservas/credito").then((r) => r.json()).then((c) => setCredit(Number(c.creditCents) || 0)).catch(() => {}); }, []);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
 
   // horários de N em N minutos; o check-out e os valores já escolhidos sempre aparecem na lista
@@ -184,6 +191,7 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
             {quote ? <>
               <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
               <div className="text-2xl font-bold">{brl(quote.totalCents)}</div>
+              {credit > 0 && <div className="mt-1 text-sm text-livre">💰 Você tem {brl(credit)} de crédito: ele é descontado ao confirmar (primeiro de pendências anteriores, se houver).</div>}
               <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
             </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
           </div>

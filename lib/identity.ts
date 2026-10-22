@@ -24,3 +24,13 @@ export function samePerson(a: Who, b: Who): boolean {
   const eq = (x: string, y: string) => x !== "" && x === y;
   return eq(nameKey(a.name), nameKey(b.name)) || eq(plateKey(a.plate), plateKey(b.plate)) || eq(apartmentKey(a.apartment), apartmentKey(b.apartment));
 }
+
+/**
+ * Dono de CRÉDITO (dinheiro a devolver/abater) é mais rígido que a regra de pendência: mesmo nome E mesmo
+ * apartamento ou placa. Assim o crédito de uma pessoa não paga a reserva de outra só por morarem no mesmo apto,
+ * e ninguém usa o crédito do vizinho digitando só o apartamento dele.
+ */
+export function sameOwner(a: Who, b: Who): boolean {
+  const eq = (x: string, y: string) => x !== "" && x === y;
+  return eq(nameKey(a.name), nameKey(b.name)) && (eq(plateKey(a.plate), plateKey(b.plate)) || eq(apartmentKey(a.apartment), apartmentKey(b.apartment)));
+}

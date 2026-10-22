@@ -101,7 +101,7 @@ await test("rate limit de reservas: 9ª tentativa do mesmo IP em 1h → 429", as
 await test("minhas reservas: dono vê só as suas, sem dados pessoais; outros não veem nada", async () => {
   resA2 = (await book(D(42), "10:00", D(42), "12:00", { jar: A })).json; eq(resA2.totalCents, 3000);
   const a = await call("GET", "/api/minhas-reservas", { jar: A }); eq(a.json.length, 2);
-  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "end", "feeCents", "id", "paymentStatus", "receiptCount", "shortId", "start", "status", "totalCents"]);
+  assert.deepEqual(Object.keys(a.json[0]).sort(), ["breakdown", "creditCents", "end", "feeCents", "id", "paidWithCredit", "paymentStatus", "receiptCount", "shortId", "start", "status", "totalCents"]);
   for (const s of ["João", "ABC1D23", "Argo"]) assert.ok(!a.text.includes(s));
   eq((await call("GET", "/api/minhas-reservas", { jar: B })).json.length, 0); eq((await call("GET", "/api/minhas-reservas")).json.length, 0); });
 await test("código de acompanhamento vincula a outro aparelho; errado → 404; 11 tentativas → 429", async () => {
@@ -350,7 +350,7 @@ await test("WHATSAPP: opcional; guarda só dígitos; inválido → 400; só admi
   eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { phone: "" } })).status, 200); eq((await dbRow(id)).phone, null); });
 await test("COBRANÇA: detalhe traz as pendências do apto (+ a própria, mesmo futura); registrar cobrança audita cada uma; só admin", async () => {
   const d = await detail(debtB); // debtB já foi paga; debtA (usada, sem comprovante) é a pendência do 707
-  assert.ok(d.charge.some((c) => c.id === debtA)); assert.ok(!d.charge.some((c) => c.id === debtB)); for (const c of d.charge) assert.deepEqual(Object.keys(c).sort(), ["end_at", "fee_cents", "id", "start_at", "total_cents"]);
+  assert.ok(d.charge.some((c) => c.id === debtA)); assert.ok(!d.charge.some((c) => c.id === debtB)); for (const c of d.charge) assert.deepEqual(Object.keys(c).sort(), ["credit_cents", "end_at", "fee_cents", "id", "start_at", "total_cents"]);
   const fut = (await db.query("select id from reservations where start_at=$1", [Z(D(5), "05:00")])).rows[0].id;
   const f = await detail(fut); assert.ok(f.charge.some((c) => c.id === fut)); assert.ok(f.charge.some((c) => c.id === debtA));
   const r = await call("POST", `/api/admin/reservations/${fut}/cobranca`, { jar: ADM }); eq(r.status, 200); eq(r.json.itens, f.charge.length);
@@ -487,4 +487,98 @@ await test("BACKUP: só admin; JSON sem hash do código nem admin_epoch; CSV com
   assert.ok(!("admin_epoch" in j.json.settings) && "pricing" in j.json.settings);
   const c = await call("GET", "/api/admin/export?format=csv", { jar: ADM }); eq(c.status, 200);
   assert.match(c.headers.get("content-type") ?? "", /text\/csv/); assert.ok(c.text.includes(`"'=HIPERLINK(""x"")"`)); assert.ok(c.text.split("\r\n")[0].includes(";")); });
+
+// ================= CRÉDITO (pagou a mais) =================
+const CR = { name: "Credora Teste", apartment: "950", plate: "CRD1A23" }; // dona do crédito
+const CJ = {}; // o aparelho dela
+const idAt = async (d, hm) => (await db.query("select id from reservations where start_at=$1 and deleted_at is null", [Z(d, hm)])).rows[0].id;
+const pay = (id, cents, jar = ADM) => call("POST", `/api/admin/reservations/${id}/pagamento`, { jar, body: { receivedCents: cents } });
+const credit = async (jar) => (await call("GET", "/api/minhas-reservas/credito", { jar })).json.creditCents;
+await test("CRÉDITO: pagou R$60 devendo R$30 → reserva quitada e R$30 guardados; lote e uso imutáveis; banco recusa saldo negativo", async () => {
+  await login(ADM);
+  const r = await book(D(10), "13:00", D(10), "14:00", { jar: CJ, extra: CR }); eq(r.status, 201); eq(r.json.totalCents, 3000); eq(r.json.creditUsedCents, 0); eq(r.json.paymentStatus, "pendente");
+  const id = await idAt(D(10), "13:00");
+  const p = await pay(id, 6000); eq(p.status, 200, p.text); eq(p.json.paid, true); eq(p.json.usedHereCents, 3000); eq(p.json.creditLeftCents, 3000);
+  const d = await detail(id); eq(d.payment_status, "pago"); assert.ok(d.paid_at); eq(d.credit_cents, 3000); eq(d.credit.balanceCents, 3000); eq(d.credit.lots[0].remainingCents, 3000);
+  assert.ok(d.events.some((e) => e.action === "pagamento_registrado" && e.details.recebido_cents === 6000)); assert.ok(d.events.some((e) => e.action === "credito_usado" && e.details.quitou));
+  eq(await credit(CJ), 3000); eq(await credit(undefined), 0); eq(await credit({}), 0);
+  await assert.rejects(db.query("update credits set amount_cents = 1"), /imutável/); await assert.rejects(db.query("delete from credit_uses"), /imutável/);
+  const lot = (await db.query("select id from credits where reservation_id=$1", [id])).rows[0].id;
+  await assert.rejects(db.query("insert into credit_uses (credit_id, amount_cents, reason) values ($1, 999999, 'baixa')", [lot]), /saldo inválido/); });
+await test("CRÉDITO: a próxima reserva do mesmo aparelho já nasce paga com o crédito; \"Minhas reservas\" mostra o abatido", async () => {
+  const r = await book(D(11), "13:00", D(11), "14:00", { jar: CJ, extra: CR }); eq(r.status, 201); eq(r.json.creditUsedCents, 3000); eq(r.json.paymentStatus, "pago");
+  eq(await credit(CJ), 0);
+  const m = (await call("GET", "/api/minhas-reservas", { jar: CJ })).json.find((x) => x.start === Z(D(11), "13:00")); eq(m.creditCents, 3000); eq(m.paymentStatus, "pago"); eq(m.paidWithCredit, true);
+  const first = (await call("GET", "/api/minhas-reservas", { jar: CJ })).json.find((x) => x.start === Z(D(10), "13:00")); eq(first.paidWithCredit, false); }); // paga com o próprio PIX
+await test("CRÉDITO: outro aparelho com os mesmos dados ou outra pessoa do mesmo apto NÃO usa nem vê o crédito; admin usa pelo painel", async () => {
+  eq((await book(D(13), "13:00", D(13), "14:00", { jar: CJ, extra: CR })).json.creditUsedCents, 0); // sem saldo agora
+  const p = await pay(await idAt(D(13), "13:00"), 7500); eq(p.json.paid, true); eq(p.json.creditLeftCents, 4500);
+  const K = {}; // aparelho de outra pessoa digitando os dados da Credora
+  const k1 = await book(D(13), "15:00", D(13), "16:00", { jar: K, extra: CR }); eq(k1.json.creditUsedCents, 0); eq(k1.json.paymentStatus, "pendente");
+  eq(await credit(K), 0);
+  const k2 = await book(D(13), "17:00", D(13), "18:00", { jar: K, extra: CR }); eq(k2.json.creditUsedCents, 0); // a 1ª reserva dele não está paga: continua sem acesso
+  const outra = await book(D(13), "19:00", D(13), "20:00", { jar: CJ, extra: { name: "Vizinha Outra", apartment: "950", plate: "OUT1A23" } });
+  eq(outra.json.creditUsedCents, 0); // mesmo apto, outro nome: o crédito não é dela
+  const u = await call("POST", `/api/admin/reservations/${await idAt(D(13), "15:00")}/credito`, { jar: ADM, body: { action: "usar" } });
+  eq(u.status, 200, u.text); eq(u.json.usedCents, 3000); eq(u.json.paid, true); eq(u.json.creditLeftCents, 1500);
+  const o = await call("POST", `/api/admin/reservations/${await idAt(D(13), "19:00")}/credito`, { jar: ADM, body: { action: "usar" } });
+  eq(o.status, 400); assert.match(o.json.error, /não tem crédito/); });
+await test("CRÉDITO: cancelar reserva paga com crédito devolve o valor, que paga sozinho a próxima pendência da pessoa; vizinho cancelando também devolve", async () => {
+  const k1 = await idAt(D(13), "15:00"), k2 = await idAt(D(13), "17:00");
+  eq((await call("PATCH", `/api/admin/reservations/${k1}`, { jar: ADM, body: { status: "cancelada" } })).status, 200);
+  assert.ok((await detail(k1)).events.some((e) => e.action === "credito_devolvido" && e.details.valor_cents === 3000));
+  const d2 = await detail(k2); eq(d2.payment_status, "pago"); eq(d2.credit_cents, 3000); eq(d2.credit.balanceCents, 1500);
+  const mine = (await call("GET", "/api/minhas-reservas", { jar: CJ })).json.find((x) => x.start === Z(D(11), "13:00"));
+  eq((await call("DELETE", `/api/minhas-reservas/${mine.id}`, { jar: CJ })).status, 200);
+  eq(await credit(CJ), 4500); });
+await test("CRÉDITO: \"voltar para pendente\" devolve o crédito e NÃO reaplica; excluir devolve; contas e backup incluem o crédito", async () => {
+  const r = await book(D(10), "17:00", D(10), "18:00", { jar: CJ, extra: CR }); eq(r.json.creditUsedCents, 3000); eq(r.json.paymentStatus, "pago");
+  const id = await idAt(D(10), "17:00"); eq(await credit(CJ), 1500);
+  eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { paymentStatus: "pendente" } })).status, 200);
+  const d = await detail(id); eq(d.payment_status, "pendente"); eq(d.credit_cents, 0); eq(await credit(CJ), 4500);
+  eq((await call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "usar" } })).json.usedCents, 3000);
+  eq((await call("DELETE", `/api/admin/reservations/${id}`, { jar: ADM })).status, 200); eq(await credit(CJ), 4500);
+  const list = (await call("GET", "/api/admin/reservations", { jar: ADM })).json; assert.ok(list.every((x) => typeof x.credit_cents === "number"));
+  const b = (await call("GET", "/api/admin/export", { jar: ADM })).json; assert.ok(b.credits.length >= 2 && b.creditUses.length >= 4);
+  assert.ok((await call("GET", "/api/admin/export?format=csv", { jar: ADM })).text.split("\r\n")[0].includes("abatido com crédito")); });
+await test("PAGAMENTO PARCIAL: recebeu menos → abate e continua pendente; cobrança conta só o que falta; valores inválidos → 400; só admin", async () => {
+  const PJ = {}, P = { name: "Parcial Teste", apartment: "951", plate: "PRC1A23" };
+  eq((await book(D(10), "15:00", D(10), "16:00", { jar: PJ, extra: P })).status, 201); const id = await idAt(D(10), "15:00");
+  eq((await pay(id, 1000, {})).status, 401);
+  for (const v of [0, -5, 1.5, "10"]) eq((await pay(id, v)).status, 400, String(v));
+  const p = await pay(id, 1000); eq(p.json.paid, false); eq(p.json.usedHereCents, 1000); eq(p.json.creditLeftCents, 0);
+  const d = await detail(id); eq(d.payment_status, "pendente"); eq(d.credit_cents, 1000);
+  const item = d.charge.find((c) => c.id === id); eq(item.credit_cents, 1000);
+  eq((await call("POST", `/api/admin/reservations/${id}/cobranca`, { jar: ADM })).status, 200);
+  const ev = (await detail(id)).events.filter((e) => e.action === "cobranca_aberta").at(-1); assert.match(ev.details.total, /20,00/);
+  eq((await call("GET", "/api/minhas-reservas", { jar: PJ })).json[0].creditCents, 1000);
+  eq((await pay(id, 2000)).json.paid, true);
+  const again = await pay(id, 500); eq(again.status, 400); assert.match(again.json.error, /já está paga/);
+  eq((await pay(crypto.randomUUID(), 500)).status, 404); eq((await pay("x", 500)).status, 404); });
+await test("CRÉDITO AVULSO e BAIXA: lançar paga a pendência e guarda o resto; baixa zera o saldo (auditada); só admin", async () => {
+  const PJ = {}, P = { name: "Parcial Teste", apartment: "951", plate: "PRC1A23" };
+  eq((await book(D(11), "15:00", D(11), "16:00", { jar: PJ, extra: P })).status, 201); const id = await idAt(D(11), "15:00");
+  eq((await call("POST", `/api/admin/reservations/${id}/credito`, { body: { action: "lancar", amountCents: 5000 } })).status, 401);
+  eq((await call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "lancar", amountCents: 0 } })).status, 400);
+  eq((await call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "outra" } })).status, 400);
+  const r = await call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "lancar", amountCents: 5000, note: "PIX sem reserva" } });
+  eq(r.status, 200, r.text); eq(r.json.usedCents, 3000); eq(r.json.creditLeftCents, 2000); eq((await detail(id)).payment_status, "pago");
+  const lot = (await detail(id)).credit.lots[0]; eq(lot.remainingCents, 2000); eq(lot.note, "PIX sem reserva");
+  eq((await call("POST", `/api/admin/creditos/${lot.id}/baixa`, { body: {} })).status, 401);
+  eq((await call("POST", `/api/admin/creditos/${crypto.randomUUID()}/baixa`, { jar: ADM, body: {} })).status, 404);
+  const b = await call("POST", `/api/admin/creditos/${lot.id}/baixa`, { jar: ADM, body: { note: "devolvido em dinheiro" } }); eq(b.status, 200, b.text); eq(b.json.removedCents, 2000);
+  eq((await detail(id)).credit.balanceCents, 0);
+  eq((await call("POST", `/api/admin/creditos/${lot.id}/baixa`, { jar: ADM, body: {} })).json.removedCents, 0);
+  assert.ok((await db.query("select 1 from reservation_events where action='credito_baixa' and details->>'obs'='devolvido em dinheiro'")).rowCount === 1); });
+await test("CORRIDA: 4 pedidos simultâneos de \"usar crédito\" com saldo para 1 reserva → só R$15 são gastos", async () => {
+  const Q = { name: "Corrida Credito", apartment: "952", plate: "RAC1E23" };
+  for (const h of ["19", "21", "22", "23", "13"]) eq((await book(D(12), `${h}:00`, D(12), `${h}:30`, { extra: Q })).status, 201);
+  const ids = []; for (const h of ["19", "21", "22", "23", "13"]) ids.push(await idAt(D(12), `${h}:00`));
+  for (const id of ids.slice(0, 4)) await db.query("insert into payment_receipts (reservation_id, mime, data) values ($1, 'image/jpeg', '\\xffd8')", [id]); // pula o automático
+  eq((await call("PATCH", `/api/admin/reservations/${ids[4]}`, { jar: ADM, body: { status: "cancelada" } })).status, 200);
+  // a 5ª (13h) é cancelada só para receber o lançamento sem ser paga por ele
+  const l = await call("POST", `/api/admin/reservations/${ids[4]}/credito`, { jar: ADM, body: { action: "lancar", amountCents: 1500 } }); eq(l.json.usedCents, 0); eq(l.json.creditLeftCents, 1500);
+  const rs = await Promise.all(ids.slice(0, 4).map((id) => call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "usar" } })));
+  const used = rs.filter((r) => r.status === 200).reduce((t, r) => t + r.json.usedCents, 0); eq(used, 1500); // os outros: 400 "sem crédito" ou 0
+  eq((await db.query("select coalesce(sum(u.amount_cents),0)::int s from credit_uses u join credits c on c.id=u.credit_id where c.name='Corrida Credito'")).rows[0].s, 1500); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);
