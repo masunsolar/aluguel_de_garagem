@@ -12,18 +12,24 @@ const shift = (m: string, n: number) => { const d = new Date(m + "-15T12:00:00Z"
 const who = (r: any) => (r.status === "bloqueada" ? `Bloqueio${r.notes ? `: ${r.notes}` : ""}` : `${r.name ?? "Sem identificação"}${r.apartment ? ` • ${r.apartment}` : ""}`);
 const hm = (s: string) => fmtBR(s).slice(-5);
 
-/** Resumo do mês: a reserva entra no mês em que começa. Lucro = recebido − custo mensal da garagem. */
-export function MonthSummary({ rows, monthlyCost }: { rows: any[]; monthlyCost: number }) {
+/**
+ * Resumo do mês: a reserva entra no mês em que começa. Lucro = recebido + créditos em caixa − custo mensal.
+ * Créditos em caixa = créditos que VOCÊ aprovou (pedido confirmado, lançado ou sobra de pagamento registrado) no mês
+ * e que ainda não foram usados. Pedido pendente não entra. Quando o crédito paga uma reserva, sai daqui e passa a
+ * contar em "Recebido" no mês da reserva: o mesmo dinheiro nunca é contado duas vezes.
+ */
+export function MonthSummary({ rows, monthlyCost, credits = [] }: { rows: any[]; monthlyCost: number; credits?: { createdAt: string; remainingCents: number }[] }) {
   const [m, setM] = useState(() => month(new Date().toISOString()));
   const list = rows.filter((r) => REVENUE.includes(r.status) && month(r.start_at) === m);
   // crédito já abatido numa reserva ainda pendente conta como recebido
   const received = list.reduce((t, r) => t + (r.payment_status === "pago" ? r.total_cents : r.credit_cents ?? 0), 0);
   const pending = list.filter((r) => r.payment_status !== "pago").reduce((t, r) => t + r.total_cents - (r.credit_cents ?? 0), 0);
+  const credit = credits.filter((c) => month(c.createdAt) === m).reduce((t, c) => t + c.remainingCents, 0);
   const cost = Math.round(monthlyCost * 100);
   // ocupação: horas usadas dentro do mês / horas do mês (recorta reservas que atravessam a virada)
   const a = +brtToDate(m + "-01", "00:00"), b = +brtToDate(shift(m, 1) + "-01", "00:00");
   const used = list.reduce((t, r) => t + Math.max(0, Math.min(b, +new Date(r.end_at)) - Math.max(a, +new Date(r.start_at))), 0);
-  const result = received - cost, forecast = received + pending - cost;
+  const result = received + credit - cost, forecast = received + credit + pending - cost;
   const tone = (v: number) => (v >= 0 ? "text-livre" : "text-ocupado");
   return (
     <section className="rounded-2xl bg-white p-4" aria-label="Resumo do mês">
@@ -33,11 +39,12 @@ export function MonthSummary({ rows, monthlyCost }: { rows: any[]; monthlyCost: 
         <button onClick={() => setM(month(new Date().toISOString()))} className="rounded-lg border border-asfalto/20 px-3 py-1 text-sm">Este mês</button>
         <button onClick={() => setM(shift(m, 1))} className="rounded-lg border border-asfalto/20 px-3 py-1" aria-label="Próximo mês">›</button>
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <Stat label="Recebido" value={brl(received)} cls="text-livre" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Recebido" value={brl(received)} cls="text-livre" hint="reservas do mês" />
+        <Stat label="Créditos em caixa" value={brl(credit)} cls="text-livre" hint="aprovados no mês, ainda não usados" />
         <Stat label="A receber" value={brl(pending)} />
         <Stat label="Custo da garagem" value={`− ${brl(cost)}`} cls="text-asfalto/70" />
-        <Stat label="Lucro até agora" value={brl(result)} cls={tone(result)} hint="recebido − custo" />
+        <Stat label="Lucro até agora" value={brl(result)} cls={tone(result)} hint="recebido + créditos − custo" />
         <Stat label="Se todos pagarem" value={brl(forecast)} cls={tone(forecast)} hint={`${list.length} reserva${list.length === 1 ? "" : "s"} • ${Math.round((used / (b - a)) * 100)}% do mês ocupado`} />
       </div>
     </section>
