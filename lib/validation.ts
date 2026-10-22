@@ -42,6 +42,18 @@ export const creditActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("lancar"), amountCents: money, note }), // lançar crédito avulso para a pessoa desta reserva
 ]);
 export const writeOffSchema = z.object({ note });
+// Vizinho pede crédito ("mandei R$ X"): só vira crédito quando o admin confirma.
+export const creditRequestSchema = z.object({
+  amountCents: z.number().int().min(100, "O valor mínimo é R$ 1,00.").max(1_000_000, "Valor alto demais."),
+  name: clean(80, 2), apartment: clean(20), plate: plate.optional().or(z.literal("")), phone: phone.optional(), note,
+  website: z.string().max(200).optional(), // isca (honeypot)
+});
+// Admin lança crédito para uma pessoa (sem reserva)
+export const adminCreditSchema = z.object({ name: clean(80, 2), apartment: txt(20), plate: plate.nullish().or(z.literal("")), amountCents: money, note });
+export const creditDecisionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("confirmar"), amountCents: money, note }),
+  z.object({ action: z.literal("recusar"), note }),
+]);
 
 export const pricingSchema = z.object({
   dayPrice: z.number().min(0).max(10000), nightPrice: z.number().min(0).max(10000),

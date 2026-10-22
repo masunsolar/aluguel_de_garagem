@@ -2,6 +2,7 @@
 import { clearProfile, loadProfile, saveProfile } from "@/lib/profile";
 import { useEffect, useMemo, useState } from "react";
 import MyReservations from "./MyReservations";
+import MyCredit from "./MyCredit";
 import PixBox from "./PixBox";
 import PriceBreakdown from "./PriceBreakdown";
 import DayBar from "./DayBar";
@@ -95,6 +96,7 @@ export default function Booking() {
       <p className="mt-4 text-sm text-asfalto/70">🕥 Check-out até <b>{pricing.checkoutTime}</b>: quem pernoita e sai até esse horário não paga a manhã.</p>
       <button onClick={() => setOpen(true)} className="mt-3 w-full rounded-xl bg-faixa px-4 py-3.5 text-lg font-semibold text-asfalto shadow-sm">+ Fazer reserva</button>
       {open && <Form day={day} pricing={pricing} step={step} busy={busy ?? []} maxDate={days[days.length - 1]} onClose={() => setOpen(false)} onDone={setDone} />}
+      <MyCredit key={`c${ver}`} />
       <MyReservations key={ver} />
     </>
   );

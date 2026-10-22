@@ -223,3 +223,14 @@ export async function logCharge(id: string) {
     returning reservation_id`;
   return r.length;
 }
+
+/** Admin anexa comprovante de pagamento numa reserva (não muda o pagamento: ele registra o valor depois). */
+export async function addReceiptAdmin(id: string, bytes: Buffer, mime: string) {
+  const [ok] = await sql`select (select count(*) from payment_receipts where reservation_id = ${id}) as n from reservations where id = ${id} and deleted_at is null`;
+  if (!ok) return false;
+  if (Number(ok.n) >= RULES.maxReceipts + 3) throw new UserError(`Limite de ${RULES.maxReceipts + 3} comprovantes por reserva.`);
+  await sql`with c as (insert into payment_receipts (reservation_id, mime, data) values (${id}, ${mime}, decode(${bytes.toString("base64")}, 'base64')) returning id)
+    insert into reservation_events (reservation_id, actor, action, details)
+    select ${id}::uuid, 'admin', 'comprovante_anexado', jsonb_build_object('receiptId', c.id) from c`;
+  return true;
+}

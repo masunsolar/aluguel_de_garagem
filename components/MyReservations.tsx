@@ -13,11 +13,7 @@ export default function MyReservations() {
   const [list, setList] = useState<any[] | null>(null);
   const [code, setCode] = useState(""); const [err, setErr] = useState("");
   const [pix, setPix] = useState<PixConfig | null>(null);
-  const [credit, setCredit] = useState(0); // saldo de crédito de quem usa este aparelho (pagou a mais antes)
-  const load = () => {
-    fetch("/api/minhas-reservas/credito").then((r) => r.json()).then((c) => setCredit(Number(c.creditCents) || 0)).catch(() => {});
-    return fetch("/api/minhas-reservas").then((r) => r.json()).then(setList);
-  };
+  const load = () => fetch("/api/minhas-reservas").then((r) => r.json()).then(setList); // o saldo de crédito fica em "Meu crédito"
   useEffect(() => { load(); fetch("/api/config").then((r) => r.json()).then((c) => setPix(c.pix ?? null)).catch(() => {}); }, []);
   async function link(e: React.FormEvent) {
     e.preventDefault(); setErr("");
@@ -44,7 +40,6 @@ export default function MyReservations() {
   return (
     <section className="mt-8">
       <h2 className="text-lg font-semibold">Minhas reservas</h2>
-      {credit > 0 && <p className="mt-2 rounded-xl bg-livre/10 p-3 text-sm">💰 Você tem <b>{brl(credit)}</b> de crédito. Ele é descontado automaticamente das suas próximas reservas.</p>}
       {list?.length === 0 && <p className="mt-2 text-asfalto/60">Você ainda não tem reservas neste aparelho.</p>}
       <ul className="mt-2 space-y-2">
         {list?.map((r) => (

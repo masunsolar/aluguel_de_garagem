@@ -139,6 +139,14 @@ Alterações ficam no histórico de configurações.
 - Banco (`credits` + `credit_uses`): cada dinheiro recebido é um lote; usos são linhas positivas e devoluções, negativas. Nada é editado nem apagado (triggers), o banco recusa saldo negativo, e toda operação de crédito roda numa transação com o mesmo *advisory lock* (dois pedidos ao mesmo tempo não gastam o crédito duas vezes). Entra no backup JSON e na coluna "abatido com crédito" do CSV.
 - **Atualização de um banco existente:** rode `db/migrations/2026-10-22-credito.sql` no *SQL Editor* do Neon (ou `npm run db:init` apontando para ele) **antes** de publicar esta versão. Só cria tabelas; não altera nem apaga nada.
 
+## Pedidos de crédito e painel de créditos
+- **Vizinho → "Meu crédito"** (página inicial): **Adicionar crédito** mostra o PIX com o valor, e o pedido vai com o comprovante (agora ou depois). Ele acompanha os pedidos (aguardando, confirmado com o valor confirmado, recusado com o motivo, cancelado), pode cancelar enquanto pendente e vê **saldo** e **extrato** (entradas, reservas pagas com crédito, devoluções).
+- Saldo e extrato só aparecem para quem tem algo **confirmado neste aparelho** (reserva paga ou pedido confirmado). Com isso, a reserva nova feita nesse aparelho já nasce paga quando o crédito cobre.
+- **Admin → botão "Créditos"** (com o número de pedidos aguardando): confirmar o pedido com o **valor que você realmente recebeu** (cria o crédito e já paga as pendências da pessoa) ou recusar com motivo; **quem tem crédito**, com saldo, total recebido, lotes (com *dar baixa*) e extrato; **lançar crédito para uma pessoa** sem reserva; histórico de pedidos.
+- **Comprovantes**: o vizinho anexa nos próprios pedidos pendentes; você anexa em qualquer pedido e também nas reservas (editor → *Anexar comprovante*). Todos privados (só o admin vê).
+- Banco: `credit_requests` (pedido) e `credit_receipts` (comprovantes); o crédito confirmado vira um lote `deposito` em `credits` ligado ao pedido (índice único: confirmar duas vezes não duplica). Entra no backup JSON.
+- **Atualização de um banco existente:** rode `db/migrations/2026-10-22-pedidos-de-credito.sql` no *SQL Editor* do Neon (`teste` e `production`) **antes** de publicar.
+
 ## Lembrar meus dados
 - O formulário de reserva guarda nome, apartamento, WhatsApp e o **último veículo** usado no próprio aparelho (`localStorage`, `lib/profile.ts`) e preenche tudo na próxima vez. O vizinho pode alterar qualquer campo.
 - Os dados só são salvos depois de uma reserva concluída. Desmarcar "Lembrar meus dados" apaga o que estava salvo; "Não sou eu" limpa o formulário e o aparelho (útil em celular emprestado).

@@ -52,11 +52,20 @@ export async function requireAdmin(): Promise<Response | null> {
   return (await isAdmin()) ? null : Response.json({ error: "Não autorizado." }, { status: 401 });
 }
 
-export async function neighborIds(): Promise<string[]> {
+// Cookie "viz": ids das reservas (ids) e dos pedidos de crédito (crs) feitos neste navegador.
+async function neighborSession(): Promise<{ ids: string[]; crs: string[] }> {
   const p = await read("viz", "neighbor");
-  return Array.isArray(p?.ids) ? (p!.ids as string[]) : [];
+  const list = (v: unknown) => (Array.isArray(v) ? (v as unknown[]).filter((x): x is string => typeof x === "string") : []);
+  return { ids: list(p?.ids), crs: list(p?.crs) };
+}
+export async function neighborIds(): Promise<string[]> { return (await neighborSession()).ids; }
+export async function neighborCreditIds(): Promise<string[]> { return (await neighborSession()).crs; }
+async function saveNeighbor(s: { ids: string[]; crs: string[] }) {
+  (await cookies()).set("viz", await sign("neighbor", { ids: s.ids.slice(0, 50), crs: s.crs.slice(0, 50) }, "30d"), opts(2592000));
 }
 export async function rememberReservation(id: string) {
-  const ids = [...new Set([id, ...(await neighborIds())])].slice(0, 50);
-  (await cookies()).set("viz", await sign("neighbor", { ids }, "30d"), opts(2592000));
+  const s = await neighborSession(); await saveNeighbor({ ...s, ids: [...new Set([id, ...s.ids])] });
+}
+export async function rememberCreditRequest(id: string) {
+  const s = await neighborSession(); await saveNeighbor({ ...s, crs: [...new Set([id, ...s.crs])] });
 }
