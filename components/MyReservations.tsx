@@ -13,7 +13,11 @@ export default function MyReservations() {
   const [list, setList] = useState<any[] | null>(null);
   const [code, setCode] = useState(""); const [err, setErr] = useState("");
   const [pix, setPix] = useState<PixConfig | null>(null);
-  const load = () => fetch("/api/minhas-reservas").then((r) => r.json()).then(setList);
+  const [credit, setCredit] = useState(0); // saldo de crédito de quem usa este aparelho (pagou a mais antes)
+  const load = () => {
+    fetch("/api/minhas-reservas/credito").then((r) => r.json()).then((c) => setCredit(Number(c.creditCents) || 0)).catch(() => {});
+    return fetch("/api/minhas-reservas").then((r) => r.json()).then(setList);
+  };
   useEffect(() => { load(); fetch("/api/config").then((r) => r.json()).then((c) => setPix(c.pix ?? null)).catch(() => {}); }, []);
   async function link(e: React.FormEvent) {
     e.preventDefault(); setErr("");
@@ -40,6 +44,7 @@ export default function MyReservations() {
   return (
     <section className="mt-8">
       <h2 className="text-lg font-semibold">Minhas reservas</h2>
+      {credit > 0 && <p className="mt-2 rounded-xl bg-livre/10 p-3 text-sm">💰 Você tem <b>{brl(credit)}</b> de crédito. Ele é descontado automaticamente das suas próximas reservas.</p>}
       {list?.length === 0 && <p className="mt-2 text-asfalto/60">Você ainda não tem reservas neste aparelho.</p>}
       <ul className="mt-2 space-y-2">
         {list?.map((r) => (
@@ -51,14 +56,15 @@ export default function MyReservations() {
            {r.status !== "cancelada" && (
              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                <span className={`rounded-full px-2.5 py-0.5 ${r.paymentStatus === "pago" ? "bg-livre/15 text-livre" : "bg-faixa/30"}`}>
-                 {r.paymentStatus === "pago" ? "Pagamento confirmado" : r.receiptCount > 0 ? "Comprovante enviado — aguardando confirmação" : "Pagamento pendente"}</span>
+                 {r.paymentStatus === "pago" ? (r.paidWithCredit ? "Pago com crédito" : "Pagamento confirmado") : r.receiptCount > 0 ? "Comprovante enviado — aguardando confirmação" : r.creditCents > 0 ? `Falta pagar ${brl(r.totalCents - r.creditCents)}` : "Pagamento pendente"}</span>
+               {r.creditCents > 0 && r.paymentStatus !== "pago" && <span className="text-asfalto/70">{brl(r.creditCents)} já pago/abatido do seu crédito</span>}
                {r.paymentStatus !== "pago" && r.receiptCount < 3 && (
                  <label className="cursor-pointer underline">{sending === r.id ? "Enviando…" : r.receiptCount > 0 ? "Enviar outro comprovante" : "Enviar comprovante"}
                    <input type="file" accept="image/*,application/pdf" hidden disabled={!!sending} onChange={(e) => { sendReceipt(r.id, e.target.files?.[0]); e.target.value = ""; }} /></label>)}
              </div>
            )}
            {r.breakdown && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Ver o que foi cobrado</summary><PriceBreakdown breakdown={r.breakdown} chargedCents={r.totalCents - (r.feeCents ?? 0)} className="mt-1" />{r.feeCents > 0 && <p className="mt-1">+ Taxa por estacionar sem agendar: <b>{brl(r.feeCents)}</b></p>}</details>}
-           {["pendente", "confirmada", "em_andamento", "finalizada"].includes(r.status) && r.paymentStatus !== "pago" && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Pagar via PIX</summary><PixBox pix={pix} totalCents={r.totalCents} /></details>}
+           {["pendente", "confirmada", "em_andamento", "finalizada"].includes(r.status) && r.paymentStatus !== "pago" && <details className="mt-2 text-sm"><summary className="cursor-pointer underline">Pagar via PIX</summary><PixBox pix={pix} totalCents={r.totalCents - (r.creditCents ?? 0)} /></details>}
           </li>
         ))}
       </ul>

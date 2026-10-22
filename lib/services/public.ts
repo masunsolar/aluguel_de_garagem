@@ -11,6 +11,7 @@ import { calculatePrice, toDate, type PriceBreakdown } from "../pricing";
 import { getAdvanceDays, getMaxUnpaid, getPricing } from "../settings";
 import { unpaidUsedFor } from "./debts";
 import { reservationSchema } from "../validation";
+import { autoApply, reconcile, sessionIsPerson } from "./credit";
 
 // Este módulo só devolve DTOs mínimos. Nada de nome, apto, carro, notas, motivo de bloqueio ou fotos.
 export async function getBusy() {
@@ -21,7 +22,8 @@ export async function getBusy() {
 }
 
 const DAY = 86_400_000;
-export async function createPublic(i: z.infer<typeof reservationSchema>) {
+/** `sessionIds` = reservas que este navegador já tem (cookie assinado): decide se o crédito da pessoa pode ser usado sozinho. */
+export async function createPublic(i: z.infer<typeof reservationSchema>, sessionIds: string[] = []) {
   const start = toDate(i.startDate, i.startTime), end = toDate(i.endDate, i.endTime), now = Date.now();
   if (Number.isNaN(+start) || Number.isNaN(+end)) throw new UserError("Data ou horário inválido.");
   if (end <= start) throw new UserError("A saída precisa ser depois da entrada.");
@@ -46,7 +48,17 @@ export async function createPublic(i: z.infer<typeof reservationSchema>) {
                 ${i.carBrand}, ${i.carModel}, ${i.carColor}, ${i.plate}, ${i.phone || null}, ${hashCode(code)}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'vizinho', 'criada', ${details}::jsonb from r
       returning reservation_id as id`;
-    return { id: r[0].id as string, shortId: String(r[0].id).slice(0, 8).toUpperCase(), code, start, end, totalCents, breakdown };
+    const id = r[0].id as string;
+    // Crédito (pagou a mais antes) abate sozinho só se ESTE aparelho já tem reserva com o mesmo nome:
+    // assim ninguém usa o crédito do vizinho só digitando o apartamento dele. Senão, o admin usa pelo painel.
+    let creditUsedCents = 0, paymentStatus = "pendente";
+    if (await sessionIsPerson(sessionIds, i)) {
+      await autoApply(i, "sistema");
+      const [x] = await sql`select payment_status, coalesce((select sum(u.amount_cents) from credit_uses u where u.reservation_id = reservations.id), 0)::int as credit
+        from reservations where id = ${id}`;
+      creditUsedCents = Number(x?.credit ?? 0); paymentStatus = x?.payment_status ?? "pendente";
+    }
+    return { id, shortId: String(id).slice(0, 8).toUpperCase(), code, start, end, totalCents, breakdown, creditUsedCents, paymentStatus };
   } catch (e: any) {
     if (e?.code === "23P01") throw new ConflictError("Esse horário já está ocupado. Escolha outro.");
     throw e;
@@ -58,13 +70,18 @@ const toMine = (r: any) => ({
   feeCents: Number(r.fee_cents ?? 0), // taxa já incluída no total (ex.: estacionou sem agendar)
   breakdown: (json(r.price_breakdown) as PriceBreakdown | null) ?? null, // só períodos e valores; nada pessoal
   paymentStatus: r.payment_status as "pendente" | "pago", receiptCount: Number(r.receipt_count ?? 0),
+  creditCents: Number(r.credit_cents ?? 0), // já abatido (crédito ou pagamento parcial); falta pagar totalCents − creditCents
+  paidWithCredit: r.payment_status === "pago" && Number(r.other_credit_cents ?? 0) >= r.total_cents && r.total_cents > 0, // quitada com crédito de antes
   status: r.status === "irregular" ? "em_analise" : effectiveStatus(r), // o vizinho não vê a marcação interna; em andamento/finalizada são derivados do horário
 });
 export async function listMine(ids: string[]) {
   ids = ids.filter((i) => /^[0-9a-f-]{36}$/i.test(i));
   if (!ids.length) return [];
   const rows = await sql`select id, start_at, end_at, status, total_cents, fee_cents, price_breakdown, payment_status,
-    (select count(*)::int from payment_receipts c where c.reservation_id = reservations.id) as receipt_count from reservations
+    (select count(*)::int from payment_receipts c where c.reservation_id = reservations.id) as receipt_count,
+    coalesce((select sum(u.amount_cents) from credit_uses u where u.reservation_id = reservations.id), 0)::int as credit_cents,
+    coalesce((select sum(u.amount_cents) from credit_uses u join credits c on c.id = u.credit_id
+      where u.reservation_id = reservations.id and c.reservation_id is distinct from reservations.id), 0)::int as other_credit_cents from reservations
     where id::text = any(string_to_array(${ids.join(",")}, ',')) and deleted_at is null and status <> 'bloqueada' order by start_at desc`;
   return rows.map(toMine);
 }
@@ -79,6 +96,7 @@ export async function cancelMine(id: string) {
       where id = ${id} and deleted_at is null and status in ('pendente','confirmada') and start_at > now() returning id)
     insert into reservation_events (reservation_id, actor, action, details)
     select id, 'vizinho', 'status_alterado', '{"to":"cancelada"}'::jsonb from u returning reservation_id`;
+  if (r.length) await reconcile(id, "vizinho"); // crédito usado nela volta para a pessoa
   return r.length > 0;
 }
 

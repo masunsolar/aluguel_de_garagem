@@ -6,7 +6,7 @@ Next.js 15 + TypeScript + Tailwind 4 + Postgres (Neon). Pensado para Vercel + Ne
 | | Vizinhos | Administrador |
 |---|---|---|
 | Telas | `/` | `/admin` (login em `/admin/login`) |
-| API | `/api/config`, `/api/availability`, `/api/reservations`, `/api/minhas-reservas` | tudo em `/api/admin/*` |
+| API | `/api/config`, `/api/availability`, `/api/reservations`, `/api/minhas-reservas` (+ `/credito`) | tudo em `/api/admin/*` |
 | Código | `lib/services/public.ts` (só dados mínimos) | `lib/services/admin.ts` |
 | Sessão | cookie `viz`: só lista os IDs das reservas do próprio navegador | cookie `adm`: sessão do admin (revogável) |
 
@@ -116,7 +116,7 @@ Alterações ficam no histórico de configurações.
 - **Atualização de um banco existente:** rode `npm run db:init` apontando para ele **antes** de publicar esta versão (adiciona a coluna `price_breakdown`; não apaga nada).
 
 ## Pagamento e comprovante
-- Toda reserva entra com **pagamento pendente** (separado do status da reserva). O admin marca **pago** / **voltar para pendente** no editor; a data do pagamento fica registrada e auditada.
+- Toda reserva entra com **pagamento pendente** (separado do status da reserva). O admin **registra o pagamento com o valor recebido** (ver *Crédito*) ou volta para pendente no editor; a data do pagamento fica registrada e auditada.
 - O vizinho envia o comprovante (foto/print da galeria ou PDF, até 2 MB, até 3 por reserva) em "Minhas reservas". Enviar comprovante **não** marca como pago: o admin confere e marca.
 - Comprovantes são privados: só o admin vê, em `/api/admin/receipts/{id}`.
 - Fotos do veículo agora podem vir da galeria (antes o celular abria só a câmera).
@@ -129,6 +129,15 @@ Alterações ficam no histórico de configurações.
 - **Cobrar no WhatsApp** (editor, pagamento pendente): abre `api.whatsapp.com/send` com a mensagem pronta (não `wa.me`: o redirecionamento dele corrompe emojis) listando todas as reservas em aberto do apartamento (as já usadas + a atual), o total e a chave PIX. Sem telefone válido, o WhatsApp abre para você escolher o contato. Cada reserva cobrada registra "Cobrança aberta no WhatsApp" no histórico.
 - **Mensagem de cobrança editável** em *Configurações*, com prévia ao vivo. Marcadores: `{nome}` (primeiro nome), `{reservas}` (uma linha por reserva em aberto), `{total}` e `{pix}` (a linha some se não houver chave). Vazio ou "Restaurar texto padrão" volta ao texto do código (`DEFAULT_CHARGE_TEMPLATE` em `lib/whatsapp.ts`). Alterações ficam no histórico de configurações.
 - **Atualização de um banco existente:** rode `npm run db:init` antes de publicar esta versão (adiciona a coluna `phone`; não apaga nada).
+
+## Crédito (pagou a mais) e pagamento com valor
+- **Registrar pagamento** (editor, pagamento pendente): informe o **valor recebido** (vem preenchido com o que falta). O dinheiro paga esta reserva; o que **sobrar** paga as outras reservas pendentes da mesma pessoa (mais antigas primeiro) e o resto fica como **crédito**. Recebeu **menos**? Abate o que veio e a reserva continua pendente com o restante (a cobrança e o bloqueio contam só o que falta).
+- **Dono do crédito** (`sameOwner` em `lib/identity.ts`): mesmo **nome** e mesmo **apartamento ou placa**. É mais rígido que o bloqueio de propósito: o crédito de uma pessoa não paga a reserva de outra do mesmo apto.
+- O crédito **abate sozinho** as reservas pendentes da pessoa, menos as que têm comprovante a conferir. Na reserva nova feita pelo site, abate na hora **só se o aparelho já tem uma reserva paga dessa pessoa** (cookie assinado): quem digita os dados de um vizinho em outro celular não usa nem vê o crédito dele. Nesses casos, o admin usa pelo botão **Usar crédito nesta reserva**.
+- O vizinho vê o saldo em "Minhas reservas" e no formulário; a confirmação mostra "Crédito usado" e esconde o PIX quando nada falta pagar.
+- No editor: **Lançar crédito** (ex.: PIX recebido sem reserva) e **dar baixa** num crédito (dinheiro devolvido ao vizinho ou lançado por engano). **Cancelar/excluir** uma reserva paga com crédito devolve o valor para a pessoa; **Voltar para pendente** também devolve (e não reaplica sozinho).
+- Banco (`credits` + `credit_uses`): cada dinheiro recebido é um lote; usos são linhas positivas e devoluções, negativas. Nada é editado nem apagado (triggers), o banco recusa saldo negativo, e toda operação de crédito roda numa transação com o mesmo *advisory lock* (dois pedidos ao mesmo tempo não gastam o crédito duas vezes). Entra no backup JSON e na coluna "abatido com crédito" do CSV.
+- **Atualização de um banco existente:** rode `db/migrations/2026-10-22-credito.sql` no *SQL Editor* do Neon (ou `npm run db:init` apontando para ele) **antes** de publicar esta versão. Só cria tabelas; não altera nem apaga nada.
 
 ## Lembrar meus dados
 - O formulário de reserva guarda nome, apartamento, WhatsApp e o **último veículo** usado no próprio aparelho (`localStorage`, `lib/profile.ts`) e preenche tudo na próxima vez. O vizinho pode alterar qualquer campo.

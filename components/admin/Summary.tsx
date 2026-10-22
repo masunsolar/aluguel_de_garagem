@@ -16,8 +16,9 @@ const hm = (s: string) => fmtBR(s).slice(-5);
 export function MonthSummary({ rows, monthlyCost }: { rows: any[]; monthlyCost: number }) {
   const [m, setM] = useState(() => month(new Date().toISOString()));
   const list = rows.filter((r) => REVENUE.includes(r.status) && month(r.start_at) === m);
-  const received = list.filter((r) => r.payment_status === "pago").reduce((t, r) => t + r.total_cents, 0);
-  const pending = list.filter((r) => r.payment_status !== "pago").reduce((t, r) => t + r.total_cents, 0);
+  // crédito já abatido numa reserva ainda pendente conta como recebido
+  const received = list.reduce((t, r) => t + (r.payment_status === "pago" ? r.total_cents : r.credit_cents ?? 0), 0);
+  const pending = list.filter((r) => r.payment_status !== "pago").reduce((t, r) => t + r.total_cents - (r.credit_cents ?? 0), 0);
   const cost = Math.round(monthlyCost * 100);
   // ocupação: horas usadas dentro do mês / horas do mês (recorta reservas que atravessam a virada)
   const a = +brtToDate(m + "-01", "00:00"), b = +brtToDate(shift(m, 1) + "-01", "00:00");

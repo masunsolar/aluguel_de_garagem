@@ -33,6 +33,15 @@ export const adminCreateSchema = z.object({
 // priceMode só vale quando o horário muda: "keep" mantém o valor contratado, "recalc" usa os preços atuais (decisão explícita do admin)
 export const adminPatchSchema = adminCreateSchema.partial().extend({ priceMode: z.enum(["keep", "recalc"]).optional() });
 export const quoteSchema = z.object({ startAt: dt, endAt: dt });
+// ----- Crédito / pagamento registrado (centavos) -----
+const money = z.number().int().min(1, "Informe um valor maior que zero.").max(10_000_000);
+const note = z.string().trim().max(300).regex(/^[^\u0000-\u0008\u000b-\u001f<>]*$/, "Caracteres inválidos").nullish();
+export const paymentSchema = z.object({ receivedCents: money, note });
+export const creditActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("usar") }),                       // usar o crédito da pessoa nesta reserva
+  z.object({ action: z.literal("lancar"), amountCents: money, note }), // lançar crédito avulso para a pessoa desta reserva
+]);
+export const writeOffSchema = z.object({ note });
 
 export const pricingSchema = z.object({
   dayPrice: z.number().min(0).max(10000), nightPrice: z.number().min(0).max(10000),
