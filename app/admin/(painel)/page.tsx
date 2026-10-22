@@ -19,7 +19,11 @@ export default function Painel() {
   const [monthlyCost, setMonthlyCost] = useState(200);
   const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [cfg, setCfg] = useState(false);
   const [credOpen, setCredOpen] = useState(false); const [credPending, setCredPending] = useState(0); // pedidos de crédito aguardando
-  const loadCred = useCallback(() => api("/api/admin/creditos").then((c) => setCredPending(c.requests.filter((r: any) => r.status === "pendente").length)).catch(() => {}), []);
+  const [credLots, setCredLots] = useState<{ createdAt: string; remainingCents: number }[]>([]); // créditos aprovados ainda não usados (resumo do mês)
+  const loadCred = useCallback(() => api("/api/admin/creditos").then((c) => {
+    setCredPending(c.requests.filter((r: any) => r.status === "pendente").length);
+    setCredLots(c.people.flatMap((p: any) => p.lots));
+  }).catch(() => {}), []);
   useEffect(() => { loadCred(); }, [loadCred]);
   const load = useCallback(() => api("/api/admin/reservations").then((r) => { setRows(r); setLoadErr(""); }).catch((e) => setLoadErr(e.message)), []);
   const loadCost = useCallback(() => api("/api/admin/settings").then((c) => setMonthlyCost(c.monthlyCost ?? 200)).catch(() => {}), []);
@@ -59,7 +63,7 @@ export default function Painel() {
       {cfg && <Settings onSaved={loadCost} />}
       {credOpen && <Credits onChanged={() => { load(); loadCred(); }} />}
       {rows && <Today rows={rows} onOpen={(id) => setMode({ id })} />}
-      {rows && <MonthSummary rows={rows} monthlyCost={monthlyCost} />}
+      {rows && <MonthSummary rows={rows} monthlyCost={monthlyCost} credits={credLots} />}
       {rows && <Agenda rows={rows} onOpen={(id) => setMode({ id })} />}
 
       <section className="flex flex-wrap items-end gap-3 rounded-2xl bg-white p-4">
@@ -95,7 +99,7 @@ export default function Painel() {
           </button>
         ))}
       </section>
-      {mode && <Editor key={mode.id ?? mode.kind} mode={mode} onClose={() => setMode(null)} onSaved={() => { setMode(null); load(); }} onOpen={(id) => setMode({ id })} />}
+      {mode && <Editor key={mode.id ?? mode.kind} mode={mode} onClose={() => setMode(null)} onSaved={() => { setMode(null); load(); loadCred(); }} onOpen={(id) => setMode({ id })} />}
     </main>
   );
 }
