@@ -25,6 +25,7 @@ export const adminCreateSchema = z.object({
   startAt: dt, endAt: dt, status: z.enum(STATUSES).default("confirmada"),
   name: txt(80), apartment: txt(20), carBrand: txt(40), carModel: txt(40), carColor: txt(30),
   plate: plate.nullish().or(z.literal("")), notes: txt(1000), phone: phone.nullish(),
+  publicReason: txt(200), // só para bloqueios: motivo que os vizinhos veem (notes continua privado)
   // totalCents = valor do USO (sem a taxa). feeCents = taxa extra (ex.: estacionou sem agendar), somada por cima.
   totalCents: z.number().int().min(0).max(10_000_000).nullish(),
   feeCents: z.number().int().min(0).max(10_000_000).optional(),

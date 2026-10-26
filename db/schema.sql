@@ -194,3 +194,6 @@ alter table credits add constraint credits_kind_check check (kind in ('pagamento
 -- GO
 -- Um pedido vira no máximo um lote (confirmar duas vezes não duplica o crédito).
 create unique index if not exists credits_one_per_request on credits (request_id) where request_id is not null;
+-- GO
+-- Motivo do bloqueio que APARECE para os vizinhos (ex.: "Manutenção do portão"). `notes` continua só do admin.
+alter table reservations add column if not exists public_reason text check (char_length(public_reason) <= 200);

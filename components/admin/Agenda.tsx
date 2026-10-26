@@ -22,7 +22,7 @@ export default function Agenda({ rows, onOpen }: { rows: any[]; onOpen: (id: str
                 <button key={r.id} onClick={() => onOpen(r.id)} title={`${fmtBR(r.start_at)} → ${fmtBR(r.end_at)} • ${brl(r.total_cents)}`}
                   className={`mb-1 block w-full rounded-md px-1.5 py-1 text-left text-xs text-white ${r.status === "bloqueada" ? "bg-asfalto" : r.status === "irregular" ? "bg-ocupado" : "bg-livre"}`}>
                   {new Date(r.start_at) < new Date(a) ? "↤" : hm(r.start_at)}–{new Date(r.end_at) > new Date(b) ? "↦" : hm(r.end_at)}<br />
-                  {r.status === "bloqueada" ? `Bloqueio${r.notes ? `: ${r.notes}` : ""}` : `${r.name ?? "?"}${r.apartment ? ` • ${r.apartment}` : ""}`}
+                  {r.status === "bloqueada" ? `Bloqueio${r.public_reason || r.notes ? `: ${r.public_reason || r.notes}` : ""}` : `${r.name ?? "?"}${r.apartment ? ` • ${r.apartment}` : ""}`}
                 </button>
               ))}
             </div>
