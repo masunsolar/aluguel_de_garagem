@@ -184,14 +184,28 @@ await test("confirmar, irregular e cancelar ficam no histórico; cancelar libera
 await test("PATCH rejeita status inválido, priceMode inválido e id inválido; valor negativo", async () => {
   for (const body of [{ status: "hackeado" }, { priceMode: "x" }, { totalCents: -5 }]) eq((await call("PATCH", `/api/admin/reservations/${mid}`, { jar: ADM, body })).status, 400);
   eq((await call("PATCH", `/api/admin/reservations/nao-e-uuid`, { jar: ADM, body: { status: "confirmada" } })).status, 404); });
-await test("BLOQUEIO com motivo: ninguém reserva; vizinho só vê ocupado, sem motivo; desbloquear libera e audita", async () => {
-  const d = D(48); const r = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(d, "14:00"), endAt: iso(d, "18:00"), status: "bloqueada", notes: "manutenção do portão" } });
-  eq(r.status, 201); const blk = r.json.id; eq((await book(d, "15:00", d, "16:00")).status, 409);
-  const av = await call("GET", "/api/availability"); assert.ok(av.json.some((b) => b.start === Z(d, "14:00"))); assert.ok(!av.text.includes("manutenção"));
-  assert.ok(!(await call("GET", "/api/minhas-reservas", { jar: A })).text.includes("manutenção")); assert.ok((await call("GET", "/api/admin/reservations", { jar: ADM })).text.includes("manutenção do portão"));
+await test("BLOQUEIO com motivo: ninguém reserva; vizinho vê só o motivo público (nunca a anotação interna); desbloquear libera e audita", async () => {
+  const d = D(48); const r = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(d, "14:00"), endAt: iso(d, "18:00"), status: "bloqueada", notes: "chaveiro cobra R$80", publicReason: "manutenção do portão" } });
+  eq(r.status, 201); const blk = r.json.id;
+  const c = await book(d, "15:00", d, "16:00"); eq(c.status, 409); assert.ok(c.text.includes("manutenção do portão")); assert.ok(!c.text.includes("chaveiro"));
+  const av = await call("GET", "/api/availability"); const b = av.json.find((x) => x.start === Z(d, "14:00"));
+  assert.ok(b && b.blocked === true && b.reason === "manutenção do portão"); assert.ok(!av.text.includes("chaveiro"));
+  assert.ok(!(await call("GET", "/api/minhas-reservas", { jar: A })).text.includes("chaveiro")); assert.ok((await call("GET", "/api/admin/reservations", { jar: ADM })).text.includes("chaveiro cobra R$80"));
+  // editar o motivo público audita a mudança; reserva comum nunca ganha motivo público
+  eq((await call("PATCH", `/api/admin/reservations/${blk}`, { jar: ADM, body: { publicReason: "pintura do piso" } })).status, 200);
+  assert.ok((await call("GET", "/api/availability")).json.some((x) => x.reason === "pintura do piso"));
+  assert.ok((await detail(blk)).events.some((e) => e.action === "editada" && e.details.changes?.["motivo para os vizinhos"]?.to === "pintura do piso"));
   eq((await call("PATCH", `/api/admin/reservations/${blk}`, { jar: ADM, body: { status: "cancelada" } })).status, 200);
   const ev = (await detail(blk)).events; assert.ok(ev.some((e) => e.action === "bloqueio_criado") && ev.some((e) => e.action === "status_alterado" && e.details.from === "bloqueada"));
-  eq((await book(d, "15:00", d, "16:00")).status, 201); });
+  eq((await book(d, "15:00", d, "16:00")).status, 201);
+  assert.ok(!(await call("GET", "/api/availability")).json.some((x) => x.blocked && x.start === Z(d, "15:00"))); });
+await test("BLOQUEIO sem motivo: vizinho vê 'bloqueada' sem motivo; motivo público é ignorado fora de bloqueio", async () => {
+  const d = D(47); const r = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(d, "02:00"), endAt: iso(d, "03:00"), status: "bloqueada", notes: "segredo" } });
+  eq(r.status, 201); const b = (await call("GET", "/api/availability")).json.find((x) => x.start === Z(d, "02:00"));
+  assert.ok(b.blocked === true && !("reason" in b));
+  const m = await call("POST", "/api/admin/reservations", { jar: ADM, body: { startAt: iso(d, "04:00"), endAt: iso(d, "05:00"), status: "confirmada", name: "Teste", publicReason: "não deve aparecer" } });
+  eq(m.status, 201); const x = (await call("GET", "/api/availability")).json.find((y) => y.start === Z(d, "04:00")); assert.ok(!x.blocked && !x.reason);
+  for (const id of [r.json.id, m.json.id]) eq((await call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body: { status: "cancelada" } })).status, 200); });
 await test("FOTOS: só admin envia/vê/exclui; JPEG válido; tamanho e quantidade limitados; sem URL pública", async () => {
   const id = mid; eq((await upload(id, JPEG(), ADM)).status, 201);
   const photos = (await detail(id)).photos; eq(photos.length, 1); const url = `/api/admin/photos/${photos[0]}`;

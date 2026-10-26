@@ -13,12 +13,14 @@ import { unpaidUsedFor } from "./debts";
 import { reservationSchema } from "../validation";
 import { autoApply, reconcile, sessionIsPerson } from "./credit";
 
-// Este módulo só devolve DTOs mínimos. Nada de nome, apto, carro, notas, motivo de bloqueio ou fotos.
+// Este módulo só devolve DTOs mínimos. Nada de nome, apto, carro, notas ou fotos.
+// Única exceção: o motivo PÚBLICO de um bloqueio (`public_reason`), que o admin escreveu justamente para os vizinhos.
 export async function getBusy() {
-  const rows = await sql`select start_at, end_at from reservations
+  const rows = await sql`select start_at, end_at, status, public_reason from reservations
     where deleted_at is null and status in ('pendente','confirmada','em_andamento','bloqueada','irregular') and end_at > now()
     order by start_at`;
-  return rows.map((r) => ({ start: iso(r.start_at), end: iso(r.end_at) }));
+  return rows.map((r) => ({ start: iso(r.start_at), end: iso(r.end_at),
+    ...(r.status === "bloqueada" && { blocked: true, ...(r.public_reason && { reason: r.public_reason as string }) }) }));
 }
 
 const DAY = 86_400_000;
@@ -60,7 +62,12 @@ export async function createPublic(i: z.infer<typeof reservationSchema>, session
     }
     return { id, shortId: String(id).slice(0, 8).toUpperCase(), code, start, end, totalCents, breakdown, creditUsedCents, paymentStatus };
   } catch (e: any) {
-    if (e?.code === "23P01") throw new ConflictError("Esse horário já está ocupado. Escolha outro.");
+    if (e?.code === "23P01") {
+      // Se o choque é com um bloqueio que tem motivo público, conta o motivo; reserva de outro vizinho continua só "ocupado"
+      const [b] = await sql`select public_reason from reservations where deleted_at is null and status = 'bloqueada' and coalesce(public_reason, '') <> ''
+        and tstzrange(start_at, end_at, '[)') && tstzrange(${start.toISOString()}::timestamptz, ${end.toISOString()}::timestamptz, '[)') order by start_at limit 1`;
+      throw new ConflictError(b ? `Esse horário está bloqueado pelo responsável da garagem. Motivo: ${b.public_reason}` : "Esse horário já está ocupado. Escolha outro.");
+    }
     throw e;
   }
 }

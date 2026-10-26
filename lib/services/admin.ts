@@ -17,7 +17,7 @@ const FIELDS = {
   startAt: ["start_at", "entrada"], endAt: ["end_at", "saída"], status: ["status", "status"], name: ["name", "responsável"],
   apartment: ["apartment", "apartamento"], carBrand: ["car_brand", "marca"], carModel: ["car_model", "modelo"],
   carColor: ["car_color", "cor"], plate: ["plate", "placa"], notes: ["notes", "observações"], totalCents: ["total_cents", "valor"],
-  paymentStatus: ["payment_status", "pagamento"], phone: ["phone", "telefone"],
+  paymentStatus: ["payment_status", "pagamento"], phone: ["phone", "telefone"], publicReason: ["public_reason", "motivo para os vizinhos"],
 } as const;
 type Key = keyof typeof FIELDS;
 // Normaliza datas para ISO e remove o hash do código de acompanhamento
@@ -26,12 +26,12 @@ const strip = ({ access_hash, ...r }: any) => ({ ...r, price_breakdown: json(r.p
 // Todo evento é gravado no MESMO comando SQL da mudança (CTE): não há como mudar sem deixar histórico.
 async function clash(e: any, start: Date, end: Date, selfId: string | null): Promise<never> {
   if (e?.code !== "23P01") throw e;
-  const rows = await sql`select id, name, apartment, status, start_at, end_at from reservations
+  const rows = await sql`select id, name, apartment, status, public_reason, start_at, end_at from reservations
     where deleted_at is null and status in ('pendente','confirmada','em_andamento','bloqueada','irregular')
       and tstzrange(start_at, end_at, '[)') && tstzrange(${start.toISOString()}::timestamptz, ${end.toISOString()}::timestamptz, '[)')
       and id is distinct from ${selfId}::uuid order by start_at`;
   const conflicts = rows.map((r) => ({ id: r.id as string,
-    label: `${r.status === "bloqueada" ? "Horário bloqueado" : `${r.name ?? "Sem identificação"}${r.apartment ? ` (apto ${r.apartment})` : ""}`}: ${fmtBR(r.start_at)} → ${fmtBR(r.end_at)}` }));
+    label: `${r.status === "bloqueada" ? `Horário bloqueado${r.public_reason ? ` (${r.public_reason})` : ""}` : `${r.name ?? "Sem identificação"}${r.apartment ? ` (apto ${r.apartment})` : ""}`}: ${fmtBR(r.start_at)} → ${fmtBR(r.end_at)}` }));
   throw new ConflictError(`Conflito com outra reserva ativa. ${conflicts.map((c) => c.label).join(" | ")}`, conflicts);
 }
 
@@ -70,13 +70,14 @@ export async function createAdmin(i: z.infer<typeof adminCreateSchema>) {
   const total = (i.totalCents ?? calc?.totalCents ?? 0) + fee;
   const breakdown = calc ? JSON.stringify(calc.breakdown) : null;
   const action = i.status === "bloqueada" ? "bloqueio_criado" : "criada_manualmente";
+  const reason = i.status === "bloqueada" ? i.publicReason || null : null; // motivo público só existe em bloqueio
   const pay = i.paymentStatus ?? "pendente"; // toda reserva entra como pagamento pendente, salvo se o admin já marcar como pago
-  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), ...(fee > 0 && { taxa: brl(fee) }), pagamento: pay, motivo_ou_obs: i.notes ?? null });
+  const details = JSON.stringify({ status: i.status, entrada: fmtBR(start), saida: fmtBR(end), valor: brl(total), ...(fee > 0 && { taxa: brl(fee) }), pagamento: pay, motivo_ou_obs: i.notes ?? null, ...(reason && { motivo_vizinhos: reason }) });
   try {
     const r = await sql`
-      with r as (insert into reservations (start_at, end_at, total_cents, fee_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes, phone)
+      with r as (insert into reservations (start_at, end_at, total_cents, fee_cents, price_breakdown, payment_status, paid_at, status, source, name, apartment, car_brand, car_model, car_color, plate, notes, phone, public_reason)
         values (${start.toISOString()}, ${end.toISOString()}, ${total}, ${fee}, ${breakdown}::jsonb, ${pay}, ${pay === "pago" ? new Date().toISOString() : null}, ${i.status}, 'admin', ${i.name ?? null}, ${i.apartment ?? null},
-                ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}, ${i.phone || null}) returning id)
+                ${i.carBrand ?? null}, ${i.carModel ?? null}, ${i.carColor ?? null}, ${i.plate || null}, ${i.notes ?? null}, ${i.phone || null}, ${reason}) returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from r
       returning reservation_id as id`;
     // crédito que a pessoa já tem paga este registro (ex.: estacionou sem agendar e já tinha deixado dinheiro)
@@ -128,7 +129,7 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
     const r = await sql`
       with u as (update reservations set start_at = ${s.toISOString()}, end_at = ${e.toISOString()}, status = ${next.status},
         total_cents = ${next.total_cents}, fee_cents = ${next.fee_cents}, price_breakdown = ${next.price_breakdown == null ? null : JSON.stringify(json(next.price_breakdown))}::jsonb, name = ${next.name}, apartment = ${next.apartment}, car_brand = ${next.car_brand},
-        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, phone = ${next.phone},
+        car_model = ${next.car_model}, car_color = ${next.car_color}, plate = ${next.plate}, notes = ${next.notes}, phone = ${next.phone}, public_reason = ${next.public_reason ?? null},
         payment_status = ${next.payment_status}, paid_at = ${next.paid_at ? new Date(next.paid_at).toISOString() : null}, updated_at = now()
         where id = ${id} and deleted_at is null returning id)
       insert into reservation_events (reservation_id, actor, action, details) select id, 'admin', ${action}, ${details}::jsonb from u

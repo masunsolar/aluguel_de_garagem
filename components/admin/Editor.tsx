@@ -13,7 +13,7 @@ type Resident = { key: string; name: string; apartment: string | null; phone: st
   carColor: string | null; plate: string | null; plates: string[]; uses: number; lastUse: string; pendingCents: number; pendingCount: number; creditCents?: number };
 const STATUSES = ["pendente", "confirmada", "em_andamento", "finalizada", "cancelada", "irregular", "bloqueada"];
 const inp = "mt-1 w-full rounded-lg border border-asfalto/20 bg-white px-3 py-2";
-const blank = { startAt: "", endAt: "", status: "confirmada", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", notes: "", total: "", fee: "" };
+const blank = { startAt: "", endAt: "", status: "confirmada", name: "", apartment: "", carBrand: "", carModel: "", carColor: "", plate: "", phone: "", notes: "", publicReason: "", total: "", fee: "" };
 const cents = (v: string) => Math.round(Number(v || 0) * 100);
 
 function describe(e: any) {
@@ -53,7 +53,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     if (!mode.id) return;
     const d = await api(`/api/admin/reservations/${mode.id}`); setDetail(d);
     const fee = d.fee_cents ?? 0; // o total gravado já inclui a taxa; no formulário uso e taxa ficam separados
-    setF({ startAt: toLocalInput(d.start_at), endAt: toLocalInput(d.end_at), status: d.status, name: d.name ?? "", apartment: d.apartment ?? "", carBrand: d.car_brand ?? "", carModel: d.car_model ?? "", carColor: d.car_color ?? "", plate: d.plate ?? "", phone: d.phone ?? "", notes: d.notes ?? "", total: ((d.total_cents - fee) / 100).toFixed(2), fee: fee ? (fee / 100).toFixed(2) : "" });
+    setF({ startAt: toLocalInput(d.start_at), endAt: toLocalInput(d.end_at), status: d.status, name: d.name ?? "", apartment: d.apartment ?? "", carBrand: d.car_brand ?? "", carModel: d.car_model ?? "", carColor: d.car_color ?? "", plate: d.plate ?? "", phone: d.phone ?? "", notes: d.notes ?? "", publicReason: d.public_reason ?? "", total: ((d.total_cents - fee) / 100).toFixed(2), fee: fee ? (fee / 100).toFixed(2) : "" });
     setFeeOn(fee > 0);
     setRecv(((d.total_cents - (d.credit_cents ?? 0)) / 100).toFixed(2)); // valor recebido sugerido = o que falta pagar
   };
@@ -86,6 +86,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
     setErr(""); setConflicts([]); setBusy(true);
     try {
       const body: any = { startAt: fromLocalInput(f.startAt), endAt: fromLocalInput(f.endAt), status: status ?? f.status, name: f.name, apartment: f.apartment, carBrand: f.carBrand, carModel: f.carModel, carColor: f.carColor, plate: f.plate, phone: f.phone, notes: f.notes };
+      if ((status ?? f.status) === "bloqueada") body.publicReason = f.publicReason;
       if (mode.id && valueEdited) body.totalCents = cents(f.total);
       if (mode.id && timesChanged && !valueEdited) body.priceMode = priceMode;
       if (!mode.id && f.total !== "") body.totalCents = cents(f.total);
@@ -187,7 +188,8 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
               <label>Placa<input className={inp} value={f.plate} onChange={set("plate")} placeholder="ABC1D23" /></label>
               <label className="col-span-2 sm:col-span-1">WhatsApp<input className={inp} type="tel" inputMode="tel" maxLength={25} value={f.phone} onChange={set("phone")} placeholder="(43) 99999-8888" /></label>
             </>}
-            <label className="col-span-2">{block ? "Motivo (não aparece para vizinhos)" : "Observações"}<textarea rows={2} className={inp} value={f.notes} onChange={set("notes")} /></label>
+            {block && <label className="col-span-2">Motivo para os vizinhos <span className="text-sm text-asfalto/60">(aparece no site; vazio = só “bloqueada”)</span><input maxLength={200} placeholder="Ex.: manutenção do portão" className={inp} value={f.publicReason} onChange={set("publicReason")} /></label>}
+            <label className="col-span-2">{block ? "Anotação interna (só você vê)" : "Observações"}<textarea rows={2} className={inp} value={f.notes} onChange={set("notes")} /></label>
           </div>
 
           {mode.id && detail && !timesChanged && !block && <div className="rounded-xl bg-concreto p-3"><PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents - (detail.fee_cents ?? 0)} />

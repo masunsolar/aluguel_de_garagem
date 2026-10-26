@@ -11,7 +11,7 @@ import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type Pricin
 import { brtDay, fmtBR } from "@/lib/time";
 import { DEFAULT_TIME_STEP, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
 
-type Busy = { start: string; end: string };
+type Busy = { start: string; end: string; blocked?: boolean; reason?: string };
 const iso = brtDay;
 const hm = (s: string) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
 // "23/10 08:00 até 12:00" (mesmo dia) ou "23/10 19:00 até 24/10 10:00"
@@ -86,7 +86,8 @@ export default function Booking() {
         ) : (
           <ul className="space-y-2">
             {dayBusy.map((b, i) => (
-              <li key={i}><span className="mr-2 inline-block h-3 w-3 rounded-full bg-ocupado" />Ocupado: {hm(b.start)} até {hm(b.end)}{iso(new Date(b.end)) !== day ? " (dia seguinte)" : ""}</li>
+              <li key={i}><span className="mr-2 inline-block h-3 w-3 rounded-full bg-ocupado" />{b.blocked ? "Bloqueada" : "Ocupado"}: {hm(b.start)} até {hm(b.end)}{iso(new Date(b.end)) !== day ? " (dia seguinte)" : ""}
+                {b.blocked && b.reason && <span className="ml-5 block text-sm text-asfalto/70">Motivo: {b.reason}</span>}</li>
             ))}
             <li className="text-sm text-asfalto/60"><span className="mr-2 inline-block h-3 w-3 rounded-full bg-livre" />Fora desses horários: disponível</li>
           </ul>
