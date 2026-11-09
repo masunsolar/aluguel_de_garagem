@@ -147,6 +147,12 @@ Alterações ficam no histórico de configurações.
 - Banco: `credit_requests` (pedido) e `credit_receipts` (comprovantes); o crédito confirmado vira um lote `deposito` em `credits` ligado ao pedido (índice único: confirmar duas vezes não duplica). Entra no backup JSON.
 - **Atualização de um banco existente:** rode `db/migrations/2026-10-22-pedidos-de-credito.sql` no *SQL Editor* do Neon (`teste` e `production`) **antes** de publicar.
 
+## Reserva cancelada = sem cobrança
+- Cancelar (admin ou vizinho) zera o **valor e a taxa** e tira a reserva de "pagamento pendente": ela não entra em cobrança, bloqueio, "a receber" nem no resumo. Na lista aparece **sem cobrança**.
+- Se já tinha sido paga, nada se perde: o crédito usado volta para a pessoa e o que foi pago fora do crédito **vira crédito** dela (e já abate outras pendências).
+- O valor de antes fica no histórico. **Reativar** (mudar o status no editor) devolve esse valor; sem registro, recalcula com os preços atuais.
+- **Banco existente:** rode `db/migrations/2026-11-09-canceladas-sem-cobranca.sql` no *SQL Editor* do Neon para ajustar as canceladas antigas (pode rodar de novo sem efeito).
+
 ## Lembrar meus dados
 - O formulário de reserva guarda nome, apartamento, WhatsApp e o **último veículo** usado no próprio aparelho (`localStorage`, `lib/profile.ts`) e preenche tudo na próxima vez. O vizinho pode alterar qualquer campo.
 - Os dados só são salvos depois de uma reserva concluída. Desmarcar "Lembrar meus dados" apaga o que estava salvo; "Não sou eu" limpa o formulário e o aparelho (útil em celular emprestado).

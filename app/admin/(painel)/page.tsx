@@ -91,7 +91,8 @@ export default function Painel() {
               {r.notes && <div className="text-sm italic text-asfalto/60">{r.notes}</div>}
             </div>
             {r.photo_count > 0 && <span className="text-sm text-asfalto/60">📷 {r.photo_count}</span>}
-            {r.status !== "bloqueada" && <span className={`rounded-full px-3 py-1 text-sm ${r.payment_status === "pago" ? "bg-livre/15 text-livre" : r.receipt_count > 0 ? "bg-faixa/40" : "bg-faixa/20"}`}>
+            {r.status === "cancelada" && <span className="rounded-full bg-asfalto/10 px-3 py-1 text-sm text-asfalto/60">sem cobrança</span>}
+            {!["bloqueada", "cancelada"].includes(r.status) && <span className={`rounded-full px-3 py-1 text-sm ${r.payment_status === "pago" ? "bg-livre/15 text-livre" : r.receipt_count > 0 ? "bg-faixa/40" : "bg-faixa/20"}`}>
               {r.payment_status === "pago" ? "pago" : r.receipt_count > 0 ? "🧾 comprovante a conferir" : r.credit_cents > 0 ? `pago em parte • falta ${brl(r.total_cents - r.credit_cents)}` : "pagamento pendente"}</span>}
             {r.source === "admin" && <span className="text-sm text-asfalto/60">manual</span>}
             <span className="font-semibold">{brl(r.total_cents)}{r.fee_cents > 0 && <span className="block text-xs font-normal text-ocupado">inclui taxa {brl(r.fee_cents)}</span>}</span>

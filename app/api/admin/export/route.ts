@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     const cols: [string, (r: any) => unknown][] = [["id", (r) => r.id], ["entrada", (r) => fmtBR(r.start_at)], ["saída", (r) => fmtBR(r.end_at)],
       ["status", (r) => r.status], ["origem", (r) => r.source], ["valor", (r) => (r.total_cents / 100).toFixed(2).replace(".", ",")], ["taxa incluída", (r) => (r.fee_cents / 100).toFixed(2).replace(".", ",")],
       ["abatido com crédito", (r) => (r.credit_cents / 100).toFixed(2).replace(".", ",")],
-      ["pagamento", (r) => r.payment_status], ["pago em", (r) => (r.paid_at ? fmtBR(r.paid_at) : "")], ["nome", (r) => r.name], ["apto", (r) => r.apartment],
+      ["pagamento", (r) => (r.status === "cancelada" ? "sem cobrança" : r.payment_status)], ["pago em", (r) => (r.paid_at ? fmtBR(r.paid_at) : "")], ["nome", (r) => r.name], ["apto", (r) => r.apartment],
       ["marca", (r) => r.car_brand], ["modelo", (r) => r.car_model], ["cor", (r) => r.car_color], ["placa", (r) => r.plate], ["telefone", (r) => r.phone],
       ["observações", (r) => r.notes], ["excluída em", (r) => (r.deleted_at ? fmtBR(r.deleted_at) : "")]];
     // ; como separador (Excel em pt-BR). Célula começando com = + - @ vira texto: o vizinho digita o nome, e sem isso

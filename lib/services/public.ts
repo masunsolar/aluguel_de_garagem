@@ -11,7 +11,9 @@ import { calculatePrice, toDate, type PriceBreakdown } from "../pricing";
 import { getAdvanceDays, getMaxUnpaid, getPricing } from "../settings";
 import { unpaidUsedFor } from "./debts";
 import { reservationSchema } from "../validation";
-import { autoApply, reconcile, sessionIsPerson } from "./credit";
+import { afterCancel, autoApply, paidOutsideCredit, sessionIsPerson } from "./credit";
+import { brl } from "../pricing";
+import type { Who } from "../identity";
 
 // Este módulo só devolve DTOs mínimos. Nada de nome, apto, carro, notas ou fotos.
 // Única exceção: o motivo PÚBLICO de um bloqueio (`public_reason`), que o admin escreveu justamente para os vizinhos.
@@ -98,12 +100,19 @@ export async function findByCode(code: string) {
 }
 /** Cancelamento pelo dono (a rota já confirmou que o id está na sessão dele). Só futuras, pendentes/confirmadas. */
 export async function cancelMine(id: string) {
+  const [cur] = await sql`select total_cents, fee_cents, payment_status, name, apartment, plate from reservations
+    where id = ${id} and deleted_at is null and status in ('pendente','confirmada') and start_at > now()`;
+  if (!cur) return false;
+  const cashPaid = await paidOutsideCredit(id, cur.total_cents, cur.payment_status);
+  // Cancelada não cobra nada: valor e taxa vão a zero (o valor de antes fica no histórico, para reativar)
+  const details = JSON.stringify({ to: "cancelada", changes: cur.total_cents > 0 ? { valor: { from: brl(cur.total_cents), to: brl(0) } } : {},
+    ...(cur.total_cents > 0 && { valor_anterior_cents: cur.total_cents, taxa_anterior_cents: Number(cur.fee_cents ?? 0) }) });
   const r = await sql`
-    with u as (update reservations set status = 'cancelada', updated_at = now()
+    with u as (update reservations set status = 'cancelada', total_cents = 0, fee_cents = 0, payment_status = 'pendente', paid_at = null, updated_at = now()
       where id = ${id} and deleted_at is null and status in ('pendente','confirmada') and start_at > now() returning id)
     insert into reservation_events (reservation_id, actor, action, details)
-    select id, 'vizinho', 'status_alterado', '{"to":"cancelada"}'::jsonb from u returning reservation_id`;
-  if (r.length) await reconcile(id, "vizinho"); // crédito usado nela volta para a pessoa
+    select id, 'vizinho', 'status_alterado', ${details}::jsonb from u returning reservation_id`;
+  if (r.length) await afterCancel(id, cur as Who, cashPaid, "vizinho"); // crédito usado e valor pago voltam para a pessoa
   return r.length > 0;
 }
 

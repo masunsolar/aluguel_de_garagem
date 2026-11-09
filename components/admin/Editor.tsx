@@ -29,6 +29,8 @@ function describe(e: any) {
   if (e.action === "comprovante_anexado") return "Comprovante de pagamento anexado pelo administrador";
   if (e.action === "excluida") return "Excluída pelo administrador";
   if (e.action === "pagamento_registrado") return `Pagamento registrado: recebido ${brl(d.recebido_cents)} (faltavam ${brl(d.devido_cents)})${d.obs ? ` • ${d.obs}` : ""}`;
+  if (e.action === "pagamento_virou_credito") return `Reserva cancelada: ${brl(d.valor_cents)} já pagos viraram crédito da pessoa`;
+  if (e.action === "cancelada_sem_cobranca") return `Cancelada: valor zerado (era ${brl(d.valor_anterior_cents)})${d.pago_virou_credito_cents ? ` • ${brl(d.pago_virou_credito_cents)} pagos viraram crédito` : ""}`;
   if (e.action === "credito_usado") return `Crédito abatido: ${brl(d.valor_cents)}${d.quitou ? " (quitou a reserva)" : ""}`;
   if (e.action === "credito_devolvido") return `Crédito devolvido para a pessoa: ${brl(d.valor_cents)}`;
   if (e.action === "credito_lancado") return `Crédito avulso lançado: ${brl(d.valor_cents)}${d.obs ? ` • ${d.obs}` : ""}`;
@@ -73,8 +75,11 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
 
   const timesChanged = !!detail && !!f.startAt && !!f.endAt && (f.startAt !== toLocalInput(detail.start_at) || f.endAt !== toLocalInput(detail.end_at));
   const feeCents = feeOn ? cents(f.fee) : 0;
-  const valueEdited = !!detail && f.total !== "" && cents(f.total) !== detail.total_cents - (detail.fee_cents ?? 0);
-  const feeEdited = !!detail && feeCents !== (detail.fee_cents ?? 0);
+  // Cancelada (gravada): sem cobrança. prevValue = valor de antes do último cancelamento (volta ao reativar).
+  const cancelledSaved = !!detail && detail.status === "cancelada";
+  const prevValue: number | null = detail?.events?.filter((e: any) => e.details?.valor_anterior_cents != null).at(-1)?.details.valor_anterior_cents ?? null;
+  const valueEdited = !cancelledSaved && !!detail && f.total !== "" && cents(f.total) !== detail.total_cents - (detail.fee_cents ?? 0);
+  const feeEdited = !cancelledSaved && !!detail && feeCents !== (detail.fee_cents ?? 0);
   useEffect(() => { // cotação com os preços ATUAIS, só para informar; nada é gravado
     setNewQuote(null);
     if (!timesChanged || f.status === "bloqueada") return;
@@ -172,8 +177,10 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
             <label className="col-span-2 sm:col-span-1">Entrada<input type="datetime-local" className={inp} value={f.startAt} onChange={set("startAt")} /></label>
             <label className="col-span-2 sm:col-span-1">Saída<input type="datetime-local" className={inp} value={f.endAt} onChange={set("endAt")} /></label>
             <label>Status gravado<select className={inp} value={f.status} onChange={set("status")}>{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>{detail && effectiveStatus(detail) !== f.status && <span className="text-xs text-asfalto/60">Exibido como “{effectiveStatus(detail).replace("_", " ")}” (automático, pelo horário; nada é alterado no registro)</span>}</label>
-            {!block && <label>Valor do uso (R$){mode.id ? "" : " — vazio = calcular"}<input type="number" step="0.01" className={inp} value={f.total} onChange={set("total")} /></label>}
-            {!block && (
+            {!block && cancelledSaved && <p className="col-span-2 rounded-xl bg-concreto p-3 text-sm">Reserva cancelada: <b>sem cobrança</b> (valor zerado).{f.status !== "cancelada" ? ` Ao salvar com outro status, o valor ${prevValue ? `volta para ${brl(prevValue)}` : "é recalculado com os preços atuais"}.` : prevValue ? ` Valor antes do cancelamento: ${brl(prevValue)}.` : ""}</p>}
+            {!block && !cancelledSaved && f.status === "cancelada" && mode.id && <p className="col-span-2 rounded-xl border border-ocupado/40 bg-ocupado/5 p-3 text-sm">Ao salvar como cancelada, o valor vai a <b>R$ 0,00</b> e a reserva deixa de ficar pendente.{detail?.payment_status === "pago" ? " O que já foi pago vira crédito da pessoa." : ""}</p>}
+            {!block && !cancelledSaved && <label>Valor do uso (R$){mode.id ? "" : " — vazio = calcular"}<input type="number" step="0.01" className={inp} value={f.total} onChange={set("total")} /></label>}
+            {!block && !cancelledSaved && (
               <div className="col-span-2 rounded-xl border border-asfalto/15 p-3">
                 <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={feeOn} onChange={(e) => { setFeeOn(e.target.checked); if (e.target.checked && !Number(f.fee)) setF((p) => ({ ...p, fee: defaultFee })); }} /> Taxa por estacionar sem agendar</label>
                 {feeOn && <label className="mt-2 block text-sm">Valor da taxa (R$) — somado ao uso e mostrado separado na cobrança<input type="number" step="0.01" min={0} className={inp + " max-w-40"} value={f.fee} onChange={set("fee")} /></label>}
@@ -192,7 +199,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
             <label className="col-span-2">{block ? "Anotação interna (só você vê)" : "Observações"}<textarea rows={2} className={inp} value={f.notes} onChange={set("notes")} /></label>
           </div>
 
-          {mode.id && detail && !timesChanged && !block && <div className="rounded-xl bg-concreto p-3"><PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents - (detail.fee_cents ?? 0)} />
+          {mode.id && detail && !timesChanged && !block && !cancelledSaved && <div className="rounded-xl bg-concreto p-3"><PriceBreakdown breakdown={detail.price_breakdown} chargedCents={detail.total_cents - (detail.fee_cents ?? 0)} />
             {detail.fee_cents > 0 && <p className="mt-1 text-sm">+ Taxa por estacionar sem agendar: <b>{brl(detail.fee_cents)}</b> • Total cobrado: <b>{brl(detail.total_cents)}</b></p>}</div>}
           {mode.id && detail && timesChanged && !valueEdited && !block && (
             <fieldset className="rounded-xl border border-faixa bg-faixa/10 p-3">
@@ -203,7 +210,14 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
             </fieldset>
           )}
           {mode.id && detail && <>
-            {!block && (
+            {!block && cancelledSaved && (
+              <div className="rounded-xl border border-asfalto/15 bg-concreto p-3">
+                <h3 className="font-semibold">Pagamento: sem cobrança <span className="font-normal text-asfalto/60">(reserva cancelada)</span></h3>
+                {detail.receipts.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{detail.receipts.map((c: any) => (
+                  <a key={c.id} href={`/api/admin/receipts/${c.id}`} target="_blank" className="block w-24 text-center text-xs underline">Comprovante</a>))}</div>}
+              </div>
+            )}
+            {!block && !cancelledSaved && (
               <div className={`rounded-xl border p-3 ${detail.payment_status === "pago" ? "border-livre bg-livre/10" : "border-faixa bg-faixa/10"}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="mr-auto font-semibold">Pagamento: {detail.payment_status === "pago" ? <span className="text-livre">pago{detail.paid_at ? ` em ${fmtDT(detail.paid_at)}` : ""}</span> : "pendente"}</h3>
@@ -235,7 +249,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
                 )}
               </div>
             )}
-            {!block && detail.credit && (
+            {!block && !cancelledSaved && detail.credit && (
               <div className="rounded-xl border border-asfalto/15 p-3">
                 <h3 className="font-semibold">Crédito desta pessoa: <span className={detail.credit.balanceCents > 0 ? "text-livre" : ""}>{brl(detail.credit.balanceCents)}</span></h3>
                 <p className="text-xs text-asfalto/60">Dono do crédito = mesmo nome e mesmo apartamento ou placa. O crédito paga sozinho as reservas pendentes dela (menos as com comprovante a conferir).</p>
@@ -276,7 +290,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
           {mode.id && !block && <>
             <button disabled={busy} onClick={() => save("confirmada")} className="rounded-lg border border-livre px-3 py-2.5 text-livre">Confirmar</button>
             <button disabled={busy} onClick={() => save("irregular")} className="rounded-lg border border-faixa px-3 py-2.5">Marcar irregular</button>
-            <button disabled={busy} onClick={() => confirm("Cancelar esta reserva?") && save("cancelada")} className="rounded-lg border border-ocupado px-3 py-2.5 text-ocupado">Cancelar</button>
+            {detail?.status !== "cancelada" && <button disabled={busy} onClick={() => confirm(`Cancelar esta reserva? O valor vai a R$ 0,00 e ela deixa de ficar pendente.${detail?.payment_status === "pago" ? " O que já foi pago vira crédito da pessoa." : ""}`) && save("cancelada")} className="rounded-lg border border-ocupado px-3 py-2.5 text-ocupado">Cancelar</button>}
           </>}
           {mode.id && <button onClick={remove} className="px-3 py-2.5 text-ocupado underline">Excluir</button>}
           <button onClick={dirty ? onSaved : onClose} className="ml-auto px-3 py-2.5">Fechar</button>

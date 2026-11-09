@@ -10,7 +10,7 @@ import { adminCreateSchema, adminPatchSchema } from "../validation";
 import { openUsedRows, unpaidUsedFor, type ChargeRow } from "./debts";
 import { nameKey, plateKey } from "../identity";
 import { apartmentKey } from "../apartment";
-import { autoApply, creditInfo, lotsFor, openLots, reconcile, settle, sumLots } from "./credit";
+import { afterCancel, autoApply, creditInfo, lotsFor, openLots, paidOutsideCredit, reconcile, settle, sumLots, valueBeforeCancel } from "./credit";
 import type { Who } from "../identity";
 
 const FIELDS = {
@@ -105,12 +105,20 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   // total_cents = uso + taxa. O admin edita os dois separados; a taxa sobrevive a recalcular o uso.
   const timesChanged = "entrada" in changes || "saída" in changes;
   const curFee = Number(cur.fee_cents ?? 0), curUse = cur.total_cents - curFee;
-  const fee = next.status === "bloqueada" ? 0 : patch.feeCents ?? curFee;
+  // Cancelada não cobra nada: valor e taxa vão a zero e o pagamento deixa de ficar pendente ("sem cobrança").
+  // O que já tinha sido pago vira crédito da pessoa (afterCancel). Reativar devolve o valor de antes do cancelamento.
+  const cancelling = next.status === "cancelada" && cur.status !== "cancelada";
+  const reactivating = cur.status === "cancelada" && !["cancelada", "bloqueada"].includes(next.status);
+  const cashPaid = cancelling ? await paidOutsideCredit(id, cur.total_cents, cur.payment_status) : 0;
+  let fee = next.status === "bloqueada" ? 0 : patch.feeCents ?? curFee;
+  const before = reactivating && cur.total_cents === 0 ? await valueBeforeCancel(id) : null; // valor de antes do cancelamento
   let use = curUse;
-  let preco: "manual" | "recalculado" | "mantido" | undefined;
-  if (patch.totalCents != null && patch.totalCents !== curUse) { use = patch.totalCents; preco = "manual"; }
-  else if (timesChanged && next.status !== "bloqueada") {
-    if (patch.priceMode === "recalc") {
+  let preco: "manual" | "recalculado" | "mantido" | "restaurado" | undefined;
+  if (next.status === "cancelada") { use = 0; fee = 0; next.payment_status = "pendente"; }
+  else if (patch.totalCents != null && patch.totalCents !== curUse) { use = patch.totalCents; preco = "manual"; }
+  else if (before && (!timesChanged || patch.priceMode !== "recalc")) { use = before.totalCents - before.feeCents; fee = patch.feeCents ?? before.feeCents; preco = "restaurado"; }
+  else if ((timesChanged || (reactivating && cur.total_cents === 0)) && next.status !== "bloqueada") {
+    if (patch.priceMode === "recalc" || !timesChanged) { // reativada sem valor anterior: preços atuais
       const q = calculatePrice(new Date(next.start_at), new Date(next.end_at), await getPricing());
       use = q.totalCents; next.price_breakdown = q.breakdown; preco = "recalculado";
     } else { next.price_breakdown = null; preco = "mantido"; } // valor mantido com outro horário: o detalhamento antigo não vale mais
@@ -123,7 +131,8 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   const statusChanged = next.status !== cur.status;
   if (!statusChanged && !Object.keys(changes).length) return true;
   const action = statusChanged ? "status_alterado" : "editada";
-  const details = JSON.stringify({ ...(statusChanged && { from: cur.status, to: next.status }), changes, ...(preco && { preco }) });
+  const details = JSON.stringify({ ...(statusChanged && { from: cur.status, to: next.status }), changes, ...(preco && { preco }),
+    ...(cancelling && cur.total_cents > 0 && { valor_anterior_cents: cur.total_cents, taxa_anterior_cents: curFee }) });
   const s = new Date(next.start_at), e = new Date(next.end_at);
   try {
     const r = await sql`
@@ -138,8 +147,10 @@ export async function updateAdmin(id: string, patch: z.infer<typeof adminPatchSc
   } catch (err) { return clash(err, s, e, id); }
   // Crédito: "voltar para pendente" devolve todo o crédito abatido (é desfazer o pagamento) e não reaplica.
   // Nos demais casos devolve o que a reserva não pode mais segurar (cancelou, valor diminuiu) e reaplica nas pendências.
-  if (cur.payment_status === "pago" && next.payment_status === "pendente") await settle(id, "admin", true);
-  else { await settle(id, "admin"); await autoApply({ name: next.name, apartment: next.apartment, plate: next.plate }, "admin"); }
+  const who = { name: next.name, apartment: next.apartment, plate: next.plate };
+  if (cancelling) await afterCancel(id, who, cashPaid, "admin");
+  else if (cur.payment_status === "pago" && next.payment_status === "pendente") await settle(id, "admin", true);
+  else { await settle(id, "admin"); await autoApply(who, "admin"); }
   return true;
 }
 
