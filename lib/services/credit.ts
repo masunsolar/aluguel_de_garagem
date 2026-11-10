@@ -302,3 +302,35 @@ export async function creditPeople() {
     lots: g.lots.filter((l) => l.remainingCents > 0).reverse(), movements: await movementsOf(g.lots.reverse()) })));
   return people.sort((a, b) => b.balanceCents - a.balanceCents || (a.name ?? "").localeCompare(b.name ?? ""));
 }
+
+// ----- Cancelamento: reserva cancelada não cobra nada -----
+/** Valor que a reserva tinha antes do último cancelamento (para reativar). null = não há registro. */
+export async function valueBeforeCancel(rid: string): Promise<{ totalCents: number; feeCents: number } | null> {
+  const [e] = await sql`select details from reservation_events where reservation_id = ${rid} and details ? 'valor_anterior_cents'
+    order by created_at desc, id desc limit 1`;
+  if (!e) return null;
+  const d = typeof e.details === "string" ? JSON.parse(e.details) : e.details;
+  return { totalCents: Number(d.valor_anterior_cents) || 0, feeCents: Number(d.taxa_anterior_cents) || 0 };
+}
+
+/** Quanto da reserva foi pago FORA do crédito (ex.: marcada como paga antes do crédito existir). Leia ANTES de cancelar. */
+export async function paidOutsideCredit(rid: string, totalCents: number, paymentStatus: string): Promise<number> {
+  if (paymentStatus !== "pago") return 0;
+  const [r] = await sql`select coalesce(sum(amount_cents), 0)::int as used from credit_uses where reservation_id = ${rid}`;
+  return Math.max(0, totalCents - Number(r?.used ?? 0));
+}
+
+/**
+ * Depois que a reserva foi cancelada (valor já zerado): o crédito usado nela volta para a pessoa, o que foi pago fora
+ * do crédito vira crédito dela (o dinheiro não some da conta) e o saldo paga as outras pendências da pessoa.
+ */
+export async function afterCancel(rid: string, who: Who, cashPaidCents: number, actor: "admin" | "vizinho") {
+  await settle(rid, actor, true);
+  if (cashPaidCents > 0) {
+    const details = JSON.stringify({ valor_cents: cashPaidCents });
+    await sql`with c as (insert into credits (amount_cents, kind, reservation_id, name, apartment, plate, note)
+        values (${cashPaidCents}, 'pagamento', ${rid}::uuid, ${who.name || null}, ${who.apartment || null}, ${who.plate || null}, 'Pago na reserva cancelada') returning id)
+      insert into reservation_events (reservation_id, actor, action, details) select ${rid}::uuid, ${actor}, 'pagamento_virou_credito', ${details}::jsonb from c`;
+  }
+  if (identifies(who)) await autoApply(who, actor);
+}

@@ -662,4 +662,55 @@ await test("PAINEL DE CRÉDITOS: quem tem crédito com saldo e extrato; lançar 
   eq((await sendFile(`/api/admin/reservations/${rid}/comprovante`, JPEG(), ADM)).status, 201);
   const d = await detail(rid); eq(d.receipts.length, 1); assert.ok(d.events.some((e) => e.action === "comprovante_anexado"));
   const b = (await call("GET", "/api/admin/export", { jar: ADM })).json; assert.ok(b.creditRequests.length >= 4); });
+
+// ================= CANCELADA = SEM COBRANÇA =================
+const CX = { name: "Cancela Teste", apartment: "970", plate: "CAN1A23" };
+const patchRes = (id, body) => call("PATCH", `/api/admin/reservations/${id}`, { jar: ADM, body });
+await test("CANCELAR (admin): valor vai a zero, sai de pendente/cobrança/bloqueio; reativar devolve o valor; nada é cobrado enquanto cancelada", async () => {
+  await login(ADM);
+  eq((await book(D(12), "07:00", D(12), "08:00", { extra: CX })).status, 201); const id = await idAt(D(12), "07:00");
+  eq((await detail(id)).total_cents, 3000);
+  eq((await patchRes(id, { status: "cancelada" })).status, 200);
+  let d = await detail(id); eq(d.status, "cancelada"); eq(d.total_cents, 0, "total"); eq(d.fee_cents, 0, "taxa"); eq(d.payment_status, "pendente"); eq(d.paid_at ?? null, null, "paid_at");
+  eq(d.charge.some((c) => c.id === id), false, "charge");
+  const ev = d.events.at(-1); eq(ev.details.valor_anterior_cents, 3000, "anterior"); assert.match(ev.details.changes.valor.to, /0,00/);
+  eq((await patchRes(id, { totalCents: 5000, feeCents: 1000, paymentStatus: "pago" })).status, 200); // enquanto cancelada, continua sem cobrança
+  d = await detail(id); eq(d.total_cents, 0, "segue zero"); eq(d.payment_status, "pendente", "segue sem cobrança");
+  eq((await pay(id, 3000)).status, 400, "pagar cancelada");
+  eq((await patchRes(id, { status: "confirmada" })).status, 200);
+  d = await detail(id); eq(d.status, "confirmada"); eq(d.total_cents, 3000, "restaurado"); eq(d.payment_status, "pendente"); eq(d.events.at(-1).details.preco, "restaurado", JSON.stringify(d.events.at(-1)));
+  eq((await patchRes(id, { status: "cancelada" })).status, 200); eq((await detail(id)).total_cents, 0);
+  const csv = (await call("GET", "/api/admin/export?format=csv", { jar: ADM })).text; assert.ok(csv.includes("sem cobrança")); });
+await test("CANCELAR reserva PAGA: dinheiro pago fora do crédito vira crédito da pessoa; pago com crédito volta para o crédito (sem duplicar)", async () => {
+  eq((await book(D(12), "09:00", D(12), "10:00", { extra: CX })).status, 201); const a = await idAt(D(12), "09:00");
+  await db.query("update reservations set payment_status='pago', paid_at=now() where id=$1", [a]); // pago antes do crédito existir
+  eq((await patchRes(a, { status: "cancelada" })).status, 200);
+  let d = await detail(a); eq(d.total_cents, 0); eq(d.payment_status, "pendente"); eq(d.credit.balanceCents, 3000);
+  assert.ok(d.events.some((e) => e.action === "pagamento_virou_credito" && e.details.valor_cents === 3000));
+  eq((await book(D(12), "15:00", D(12), "16:00", { extra: CX })).status, 201); const b = await idAt(D(12), "15:00");
+  const u = await call("POST", `/api/admin/reservations/${b}/credito`, { jar: ADM, body: { action: "usar" } }); eq(u.json.paid, true); eq(u.json.creditLeftCents, 0);
+  eq((await patchRes(b, { status: "cancelada" })).status, 200);
+  d = await detail(b); eq(d.total_cents, 0); eq(d.credit_cents, 0); eq(d.credit.balanceCents, 3000); // voltou, e só uma vez
+  eq((await db.query("select count(*)::int n from credits where name=$1", [CX.name])).rows[0].n, 1); });
+await test("CANCELAR (vizinho): a própria reserva fica sem cobrança; o crédito pago nela volta", async () => {
+  const J = {};
+  eq((await book(D(12), "17:00", D(12), "18:00", { jar: J, extra: CX })).status, 201); const id = await idAt(D(12), "17:00");
+  eq((await call("POST", `/api/admin/reservations/${id}/credito`, { jar: ADM, body: { action: "usar" } })).json.paid, true); // paga com o crédito de 30
+  eq((await call("DELETE", `/api/minhas-reservas/${id}`, { jar: J })).status, 200);
+  const d = await detail(id); eq(d.status, "cancelada"); eq(d.total_cents, 0); eq(d.payment_status, "pendente"); eq(d.credit.balanceCents, 3000);
+  const m = (await call("GET", "/api/minhas-reservas", { jar: J })).json.find((x) => x.id === id); eq(m.totalCents, 0); eq(m.status, "cancelada");
+  assert.ok(d.events.some((e) => e.details?.valor_anterior_cents === 3000)); });
+await test("MIGRAÇÃO: canceladas antigas com valor ficam sem cobrança (paga vira crédito); rodar de novo não muda nada; reativar devolve o valor", async () => {
+  const P = { name: "Antiga Cancelada", apartment: "971", plate: "ANT1A23" };
+  eq((await book(D(11), "21:00", D(11), "22:00", { extra: P })).status, 201); eq((await book(D(11), "23:00", D(12), "00:00", { extra: P })).status, 201);
+  const a = await idAt(D(11), "21:00"), b = await idAt(D(11), "23:00");
+  const va = (await detail(a)).total_cents, vb = (await detail(b)).total_cents; assert.ok(va > 0 && vb > 0);
+  await db.query("update reservations set status='cancelada' where id = any($1)", [[a, b]]);
+  await db.query("update reservations set payment_status='pago', paid_at=now() where id=$1", [b]);
+  const sqlText = (await import("node:fs")).readFileSync("db/migrations/2026-11-09-canceladas-sem-cobranca.sql", "utf8");
+  const r1 = (await db.query(sqlText)).rows[0]; assert.ok(Number(r1.canceladas_zeradas) >= 2); eq(Number(r1.pagas_que_viraram_credito) >= 1, true);
+  const da = await detail(a), dbb = await detail(b);
+  eq(da.total_cents, 0); eq(da.payment_status, "pendente"); eq(dbb.total_cents, 0); eq(dbb.payment_status, "pendente"); eq(dbb.credit.balanceCents, vb);
+  const r2 = (await db.query(sqlText)).rows[0]; eq(Number(r2.canceladas_zeradas), 0); eq(Number(r2.pagas_que_viraram_credito), 0);
+  eq((await patchRes(a, { status: "confirmada" })).status, 200); eq((await detail(a)).total_cents, va); });
 console.log(`\n${pass} passaram, ${fail} falharam`); await db.end(); process.exit(fail ? 1 : 0);
