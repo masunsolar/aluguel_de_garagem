@@ -39,15 +39,20 @@ const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_40
  *  - "dia":      início do dia (dayStartHour) até o check-out do dia seguinte → diária completa (dia + noite)
  *  - "pernoite": início da noite até o check-out do dia seguinte → 1 noite (a manhã é isenta pela tolerância)
  *  - "fimdesemana": só quando a data é sexta: início da noite de sexta até o check-out de segunda
+ *  - "semana" / "quinzena": início do dia até o check-out 7 / 15 dias depois (8 / 16 datas no calendário)
  * Se a data é hoje e o início configurado já passou, a entrada vai para o próximo horário redondo
  * (o servidor não aceita entrada no passado) e `late` = true para a tela avisar. null = período já acabou.
  */
-export type PresetKind = "dia" | "pernoite" | "fimdesemana";
+export type PresetKind = "dia" | "pernoite" | "fimdesemana" | "semana" | "quinzena";
+export const PACKAGE_DAYS = { semana: 7, quinzena: 15 } as const; // saída = entrada + N dias, no horário de check-out
 export const isFriday = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay() === 5;
 export function preset(kind: PresetKind, day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
   const dayStart = hhmm(Math.round(p.dayStartHour * 60)), nightStart = hhmm(Math.round(p.nightStartHour * 60));
   if (kind === "fimdesemana" && !isFriday(day)) return null;
-  const r = kind === "dia"
+  let packageEnd = day; if (kind === "semana" || kind === "quinzena") for (let i = 0; i < PACKAGE_DAYS[kind]; i++) packageEnd = nextDay(packageEnd);
+  const r = kind === "semana" || kind === "quinzena"
+    ? { startDate: day, startTime: dayStart, endDate: packageEnd, endTime: p.checkoutTime }
+    : kind === "dia"
     ? { startDate: day, startTime: dayStart, endDate: nextDay(day), endTime: p.checkoutTime }
     : { startDate: day, startTime: nightStart, endDate: kind === "fimdesemana" ? nextDay(nextDay(nextDay(day))) : nextDay(day), endTime: p.checkoutTime };
   let late = false;

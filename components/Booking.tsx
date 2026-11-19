@@ -7,9 +7,9 @@ import PixBox from "./PixBox";
 import PriceBreakdown from "./PriceBreakdown";
 import DayBar from "./DayBar";
 import type { PixConfig } from "@/lib/pix";
-import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
+import { calculatePrice, brl, type LongPackage, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 import { brtDay, fmtBR } from "@/lib/time";
-import { DEFAULT_TIME_STEP, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
+import { DEFAULT_TIME_STEP, PACKAGE_DAYS, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
 
 type Busy = { start: string; end: string; blocked?: boolean; reason?: string };
 const iso = brtDay;
@@ -109,24 +109,26 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
   const [remember, setRemember] = useState(true); const [prefilled, setPrefilled] = useState(!!saved);
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
+  const [pkg, setPkg] = useState<LongPackage | null>(null); // Semana / 15 dias: só vale se escolhido pelo botão e mudar data/hora o desliga
   const [credit, setCredit] = useState(0); // crédito de quem usa este aparelho; o servidor decide quanto abate de verdade
   useEffect(() => { fetch("/api/minhas-reservas/credito").then((r) => r.json()).then((c) => setCredit(Number(c.creditCents) || 0)).catch(() => {}); }, []);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); if (/^(start|end)(Date|Time)$/.test(k)) setPkg(null); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
 
   // horários de N em N minutos; o check-out e os valores já escolhidos sempre aparecem na lista
   const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
 
   // atalhos com os horários configurados no painel (preço calculado pela mesma regra do servidor)
-  const kinds: PresetKind[] = isFriday(f.startDate) ? ["dia", "pernoite", "fimdesemana"] : ["dia", "pernoite"];
+  const kinds: PresetKind[] = [...(isFriday(f.startDate) ? ["dia", "pernoite", "fimdesemana"] : ["dia", "pernoite"]) as PresetKind[],
+    ...(pricing.weekPrice != null ? ["semana" as const] : []), ...(pricing.fortnightPrice != null ? ["quinzena" as const] : [])]; // só aparecem se o pacote estiver ligado
   const presets = kinds.map((k) => {
     const p = preset(k, f.startDate, pricing, step);
     let cents: number | null = null;
-    try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing).totalCents; } catch {}
+    try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing, { packages: k === "semana" || k === "quinzena" ? [k] : [] }).totalCents; } catch {}
     return { k, p, cents };
   });
 
   let quote: ReturnType<typeof calculatePrice> | null = null;
-  try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing); } catch {}
+  try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing, { packages: pkg ? [pkg] : [] }); } catch {}
   // Conflito com reservas já existentes (intervalo [): sair 21:00 e outro entrar 21:00 pode). O servidor confere de novo.
   const s0 = +toDate(f.startDate, f.startTime), e0 = +toDate(f.endDate, f.endTime);
   const clashes = quote ? busy.filter((b) => +new Date(b.start) < e0 && +new Date(b.end) > s0) : [];
@@ -134,7 +136,7 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const r = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(f) });
+      const r = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f, package: pkg ?? undefined }) });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
         if (remember) saveProfile(f); else clearProfile(); // lembra o último veículo usado
@@ -156,12 +158,12 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
             <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
-          <div className={`grid gap-3 ${presets.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
+          <div className={`grid gap-3 ${presets.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
             {presets.map(({ k, p, cents }) => (
-              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
+              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); setPkg(k === "semana" || k === "quinzena" ? k : null); }}
                 className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
-                <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : k === "pernoite" ? "🌙 Pernoite" : "📅 Fim de semana"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
+                <div className="font-semibold">{({ dia: "☀️ Dia todo", pernoite: "🌙 Pernoite", fimdesemana: "📅 Fim de semana", semana: "🗓️ Semana", quinzena: "🗓️ 15 dias" } as Record<PresetKind, string>)[k]}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
+                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} até ${p.endDate.slice(8, 10)}/${p.endDate.slice(5, 7)} ${p.endTime} (${PACKAGE_DAYS[k]} dias)` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
                 {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
               </button>
             ))}
