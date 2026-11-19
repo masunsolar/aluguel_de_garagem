@@ -7,9 +7,10 @@ const hm = (s: string) => s.slice(11, 16);
 const range = (a: string, b: string) => (a.slice(0, 10) === b.slice(0, 10) ? `${dm(a)} ${hm(a)} → ${hm(b)}` : `${dm(a)} ${hm(a)} → ${dm(b)} ${hm(b)}`);
 
 /** Tabela "o que foi contabilizado". `chargedCents` = valor realmente cobrado (se diferente do cálculo, avisa). */
-export default function PriceBreakdown({ breakdown, chargedCents, className = "" }: { breakdown: Breakdown | null | undefined; chargedCents?: number; className?: string }) {
+export default function PriceBreakdown({ breakdown, chargedCents, className = "", compact = false }: { breakdown: Breakdown | null | undefined; chargedCents?: number; className?: string; compact?: boolean }) {
   if (!breakdown?.periods?.length) return null;
   const charged = breakdown.periods.filter((p) => !p.waived);
+  if (compact) return <CompactBreakdown breakdown={breakdown} className={className} />;
   const days = charged.filter((p) => p.kind === "dia").length, nights = charged.length - days;
   const adjusted = chargedCents !== undefined && chargedCents !== breakdown.totalCents;
   return (
@@ -41,6 +42,30 @@ export default function PriceBreakdown({ breakdown, chargedCents, className = ""
       </table>
       {breakdown.periods.some((p) => p.waived) && <p className="mt-1 text-xs text-asfalto/60">* Check-out até {breakdown.checkoutTime}: a manhã da saída não é cobrada para quem pernoitou.</p>}
       {adjusted && <p className="mt-1 text-xs text-asfalto/70">Valor ajustado pelo administrador para <b>{brl(chargedCents!)}</b>.</p>}
+    </div>
+  );
+}
+
+/** Versão enxuta (tela de reserva): só pacotes/diárias com o valor, sem listar cada dia e noite. */
+function CompactBreakdown({ breakdown, className }: { breakdown: Breakdown; className: string }) {
+  const loose = breakdown.periods.filter((p) => p.pkg === undefined && !p.waived);
+  const rows: { label: string; note?: string; cents: number }[] = (breakdown.packages ?? []).map((pk) => ({
+    label: PACKAGE_LABEL[pk.kind],
+    note: pk.fullCents > pk.cents ? `economia de ${brl(pk.fullCents - pk.cents)}` : undefined,
+    cents: pk.cents,
+  }));
+  for (const kind of ["dia", "noite"] as const) {
+    const ps = loose.filter((p) => p.kind === kind);
+    if (ps.length) rows.push({ label: summarize(kind === "dia" ? ps.length : 0, kind === "noite" ? ps.length : 0), cents: ps.reduce((t, p) => t + p.cents, 0) });
+  }
+  return (
+    <div className={`text-sm ${className}`}>
+      {rows.map((r, i) => (
+        <div key={i} className="flex justify-between gap-2 border-b border-asfalto/10 py-1">
+          <span>{r.label}{r.note && <span className="text-livre"> · {r.note}</span>}</span>
+          <span className="whitespace-nowrap font-medium">{brl(r.cents)}</span>
+        </div>
+      ))}
     </div>
   );
 }

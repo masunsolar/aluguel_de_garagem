@@ -195,7 +195,7 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
               <div>Tempo total: {Math.floor(quote.minutes / 60)}h{String(quote.minutes % 60).padStart(2, "0")}</div>
               <div className="text-2xl font-bold">{brl(quote.totalCents)}</div>
               {credit > 0 && <div className="mt-1 text-sm text-livre">💰 Você tem {brl(credit)} de crédito: ele é descontado ao confirmar (primeiro de pendências anteriores, se houver).</div>}
-              <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
+              <PriceBreakdown breakdown={quote.breakdown} className="mt-2" compact />
             </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
           </div>
           <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>

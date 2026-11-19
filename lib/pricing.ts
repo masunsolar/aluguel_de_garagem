@@ -6,20 +6,21 @@
 //  - Diária completa: um "dia" + a "noite" seguinte (ex.: 09h até o check-out do dia seguinte)
 //  - Fim de semana: da noite de sexta até o check-out de segunda (noite sex, sáb, noite sáb, dom, noite dom)
 //  - Semana: 7 dias corridos (14 períodos seguidos)
+//  - 15 dias: metade de um mês (30 períodos seguidos)
 import { UserError } from "./errors";
 import { brtToDate, wallMs } from "./time";
 export type PricingConfig = {
   dayPrice: number; nightPrice: number; dayStartHour: number; nightStartHour: number; checkoutTime: string;
-  fullDayPrice: number | null; weekendPrice: number | null; weekPrice: number | null; // pacotes (null = desligado)
+  fullDayPrice: number | null; weekendPrice: number | null; weekPrice: number | null; fortnightPrice: number | null; // pacotes (null = desligado)
 };
-export const DEFAULT_PRICING: PricingConfig = { dayPrice: 30, nightPrice: 15, dayStartHour: 6, nightStartHour: 18, checkoutTime: "10:30", fullDayPrice: null, weekendPrice: null, weekPrice: null };
+export const DEFAULT_PRICING: PricingConfig = { dayPrice: 30, nightPrice: 15, dayStartHour: 6, nightStartHour: 18, checkoutTime: "10:30", fullDayPrice: null, weekendPrice: null, weekPrice: null, fortnightPrice: null };
 
 /** Um período contabilizado. start/end são o horário de Brasília ("YYYY-MM-DDTHH:mm"), já recortados pela reserva. */
 export type PricePeriod = { kind: "dia" | "noite"; start: string; end: string; cents: number; waived?: boolean; pkg?: number };
-export type PackageKind = "diaria" | "fimdesemana" | "semana";
+export type PackageKind = "diaria" | "fimdesemana" | "semana" | "quinzena";
 /** Um pacote aplicado: cobre os períodos marcados com `pkg` = índice dele. fullCents = quanto custariam avulsos. */
 export type PricePackage = { kind: PackageKind; start: string; end: string; cents: number; fullCents: number };
-export const PACKAGE_LABEL: Record<PackageKind, string> = { diaria: "Diária completa", fimdesemana: "Fim de semana", semana: "Semana" };
+export const PACKAGE_LABEL: Record<PackageKind, string> = { diaria: "Diária completa", fimdesemana: "Fim de semana", semana: "Semana", quinzena: "15 dias" };
 /** Detalhamento gravado junto com a reserva: mostra exatamente como o valor foi calculado naquele momento. */
 export type PriceBreakdown = { periods: PricePeriod[]; totalCents: number; checkoutTime: string; packages?: PricePackage[] };
 
@@ -73,7 +74,7 @@ const cents = (v: number | null | undefined) => (typeof v === "number" && v >= 0
  */
 function applyPackages(periods: PricePeriod[], starts: number[], c: PricingConfig) {
   const n = periods.length, price = (p: PricePeriod) => (p.waived ? 0 : p.cents);
-  const fullDay = cents(c.fullDayPrice), weekend = cents(c.weekendPrice), week = cents(c.weekPrice);
+  const fullDay = cents(c.fullDayPrice), weekend = cents(c.weekendPrice), week = cents(c.weekPrice), fortnight = cents(c.fortnightPrice);
   // fim de semana: noite de sexta, sábado e domingo (dia e noite). Chave = a sexta-feira daquele fim de semana.
   const weekendKey = (i: number) => {
     const day = Math.floor(starts[i] / D) * D, wd = new Date(day).getUTCDay();
@@ -88,6 +89,7 @@ function applyPackages(periods: PricePeriod[], starts: number[], c: PricingConfi
     const wk = weekend !== null ? weekendKey(i) : null;
     if (wk !== null) { let j = i; while (j < n && weekendKey(j) === wk) j++; opts.push({ take: j - i, cost: weekend!, kind: "fimdesemana" }); }
     if (week !== null) opts.push({ take: Math.min(14, n - i), cost: week, kind: "semana" });
+    if (fortnight !== null) opts.push({ take: Math.min(30, n - i), cost: fortnight, kind: "quinzena" });
     let b = opts[0];
     for (const o of opts) if (o.cost + best[i + o.take] < b.cost + best[i + b.take]) b = o; // empate: fica o avulso
     best[i] = b.cost + best[i + b.take]; pick[i] = b;
