@@ -213,6 +213,9 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
               <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
             </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
           </div>
+          {quote?.breakdown.packages?.some((k) => k.kind === "semana" || k.kind === "quinzena") && (
+            <p role="note" className="rounded-xl bg-faixa/20 p-3 text-sm">⚠️ <b>Aviso:</b> se eu precisar usar a garagem com urgência, entro em contato com você pelo WhatsApp e faço o estorno referente ao dia que foi necessário.</p>
+          )}
           {quote && sug && (
             <button type="button" onClick={() => { setErr(""); setF({ ...f, endDate: sug!.endDate, endTime: sug!.endTime }); }} className="w-full rounded-xl border border-livre/40 bg-livre/10 p-3 text-left text-sm">
               💡 <b>Sai mais barato estender:</b> ficando até {dm(sug.endDate)} às {sug.endTime} ({sug.label}) você paga <b>{brl(sug.cents)}</b>, menos que os {brl(quote.totalCents)} de agora. <span className="underline">Estender</span>
