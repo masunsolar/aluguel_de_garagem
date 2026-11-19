@@ -13,6 +13,7 @@ export const reservationSchema = z.object({
   startDate: date, startTime: time, endDate: date, endTime: time,
   name: clean(80, 2), apartment: clean(20), carBrand: clean(40, 2), carModel: clean(40), carColor: clean(30, 2), plate,
   phone: phone.optional(),
+  package: z.enum(["semana", "quinzena"]).optional(), // pacote escolhido pelo botão (o servidor confere se a reserva cobre o período)
   website: z.string().max(200).optional(), // isca (honeypot): humanos não preenchem
 });
 
