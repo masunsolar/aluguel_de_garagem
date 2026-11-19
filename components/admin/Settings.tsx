@@ -8,17 +8,27 @@ import { CHARGE_PLACEHOLDERS, DEFAULT_CHARGE_TEMPLATE, chargeMessage } from "@/l
 const SAMPLE = [{ start_at: "2026-10-18T21:00:00Z", end_at: "2026-10-19T12:00:00Z", total_cents: 1500 }, { start_at: "2026-10-20T09:00:00Z", end_at: "2026-10-20T21:00:00Z", total_cents: 4000, fee_cents: 1000 }];
 
 const input = "mt-1 block w-28 rounded-lg border border-asfalto/20 bg-white px-3 py-2";
-export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
-  const [s, setS] = useState<any>(null); const [msg, setMsg] = useState("");
-  useEffect(() => { api("/api/admin/settings").then(setS); }, []);
-  if (!s) return null;
+export default function Settings({ onSaved, initial }: { onSaved?: () => void; initial?: any } = {}) {
+  const [s, setS] = useState<any>(initial ?? null); const [msg, setMsg] = useState(""); const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!initial) api("/api/admin/settings").then(setS).catch((e) => setMsg(e.message)); }, []); // eslint-disable-line
+  if (!s) return (
+    <div className="space-y-3 rounded-2xl bg-white p-4" aria-busy="true" aria-live="polite">
+      {msg ? <p role="alert" className="text-ocupado">{msg}</p> : <>
+        <p className="text-asfalto/60">Carregando configurações…</p>
+        <div className="flex flex-wrap gap-3">{Array.from({ length: 6 }, (_, i) => <div key={i} className="h-16 w-28 animate-pulse rounded-lg bg-concreto" />)}</div>
+        <div className="h-24 animate-pulse rounded-lg bg-concreto" />
+      </>}
+    </div>
+  );
   const num = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, pricing: { ...s.pricing, [k]: Number(e.target.value) } });
   const setPix = (k: string, v: string) => setS({ ...s, pix: { ...(s.pix ?? { key: "", name: "", city: "" }), [k]: v } });
   async function save(e: React.FormEvent) {
     e.preventDefault();
     const tpl = (s.chargeTemplate ?? "").trim();
     const body = { ...s, chargeTemplate: tpl === DEFAULT_CHARGE_TEMPLATE ? "" : tpl }; // igual ao padrão = segue o padrão
+    setSaving(true); setMsg("");
     try { await api("/api/admin/settings", "PUT", body); setMsg("Configurações salvas."); onSaved?.(); } catch (x) { setMsg((x as Error).message); }
+    setSaving(false);
   }
   return (
     <form onSubmit={save} className="flex flex-wrap items-end gap-3 rounded-2xl bg-white p-4">
@@ -74,7 +84,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
         <button type="button" onClick={() => setS({ ...s, chargeTemplate: "" })} className="mt-2 text-sm underline">Restaurar texto padrão</button>
         <p className="mt-1 text-xs text-asfalto/60">Você ainda pode ajustar a mensagem no WhatsApp antes de enviar.</p>
       </fieldset>
-      <button className="rounded-lg bg-asfalto px-4 py-2.5 text-white">Salvar</button>
+      <button disabled={saving} className="rounded-lg bg-asfalto px-4 py-2.5 text-white disabled:cursor-wait disabled:opacity-60">{saving ? "Salvando…" : "Salvar"}</button>
       {msg && <span role="status">{msg}</span>}
       {s.history?.length > 0 && <details className="w-full text-sm"><summary className="cursor-pointer">Histórico de alterações</summary><ul className="mt-1 space-y-1">{s.history.map((h: any, i: number) => <li key={i}>{fmtDT(h.created_at)} — {({ pricing: "preços/check-out", pix: "PIX", booking: "reservas/horários", charge_template: "mensagem de cobrança", finance: "custo mensal", fees: "taxa sem agendamento" } as Record<string, string>)[h.details.chave] ?? "nome"}: {JSON.stringify(h.details.de)} → {JSON.stringify(h.details.para)}</li>)}</ul></details>}
     </form>

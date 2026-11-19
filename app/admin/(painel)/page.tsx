@@ -16,7 +16,7 @@ export default function Painel() {
   const [rows, setRows] = useState<any[] | null>(null); const [loadErr, setLoadErr] = useState("");
   const [mode, setMode] = useState<Mode | null>(null);
   const [view, setView] = useState("todas"); const [pay, setPay] = useState("todos"); const [q, setQ] = useState("");
-  const [monthlyCost, setMonthlyCost] = useState(200);
+  const [monthlyCost, setMonthlyCost] = useState(200); const [settings, setSettings] = useState<any>(null); const [leaving, setLeaving] = useState(false);
   const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [cfg, setCfg] = useState(false);
   const [credOpen, setCredOpen] = useState(false); const [credPending, setCredPending] = useState(0); // pedidos de crédito aguardando
   const [credLots, setCredLots] = useState<{ createdAt: string; remainingCents: number }[]>([]); // créditos aprovados ainda não usados (resumo do mês)
@@ -26,7 +26,7 @@ export default function Painel() {
   }).catch(() => {}), []);
   useEffect(() => { loadCred(); }, [loadCred]);
   const load = useCallback(() => api("/api/admin/reservations").then((r) => { setRows(r); setLoadErr(""); }).catch((e) => setLoadErr(e.message)), []);
-  const loadCost = useCallback(() => api("/api/admin/settings").then((c) => setMonthlyCost(c.monthlyCost ?? 200)).catch(() => {}), []);
+  const loadCost = useCallback(() => api("/api/admin/settings").then((c) => { setSettings(c); setMonthlyCost(c.monthlyCost ?? 200); }).catch(() => {}), []);
   useEffect(() => { load(); loadCost(); }, [load, loadCost]);
 
   const now = new Date().toISOString();
@@ -57,10 +57,10 @@ export default function Painel() {
         </details>
         <button onClick={() => setCredOpen(!credOpen)} className={`rounded-lg border px-4 py-2.5 ${credPending ? "border-faixa bg-faixa/20 font-semibold" : "border-asfalto/30"}`}>
           Créditos{credPending > 0 && <span className="ml-1 rounded-full bg-faixa px-2 py-0.5 text-sm">{credPending}</span>}</button>
-        <button onClick={() => setCfg(!cfg)} className="rounded-lg border border-asfalto/30 px-4 py-2.5">Configurações</button>
-        <button onClick={async () => { await api("/api/admin/login", "DELETE"); location.href = "/admin/login"; }} className="px-3 py-2.5 underline">Sair</button>
+        <button onClick={() => setCfg(!cfg)} aria-expanded={cfg} className="rounded-lg border border-asfalto/30 px-4 py-2.5">Configurações</button>
+        <button disabled={leaving} onClick={async () => { setLeaving(true); try { await api("/api/admin/login", "DELETE"); location.href = "/admin/login"; } catch { setLeaving(false); } }} className="px-3 py-2.5 underline disabled:cursor-wait disabled:opacity-60">{leaving ? "Saindo…" : "Sair"}</button>
       </header>
-      {cfg && <Settings onSaved={loadCost} />}
+      {cfg && <Settings key={settings ? "ok" : "wait"} initial={settings} onSaved={loadCost} />}
       {credOpen && <Credits onChanged={() => { load(); loadCred(); }} />}
       {rows && <Today rows={rows} onOpen={(id) => setMode({ id })} />}
       {rows && <MonthSummary rows={rows} monthlyCost={monthlyCost} credits={credLots} />}

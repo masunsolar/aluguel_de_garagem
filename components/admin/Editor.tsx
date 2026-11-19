@@ -164,6 +164,7 @@ export default function Editor({ mode, onClose, onSaved, onOpen }: { mode: Mode;
         {/* Só o miolo rola; o rodapé fica fora da rolagem e nunca cobre o histórico (dvh = altura real no celular) */}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-5">
           <h2 className="text-xl font-bold">{mode.id ? `Reserva #${mode.id.slice(0, 8).toUpperCase()}` : mode.kind === "bloqueio" ? "Bloquear garagem" : mode.kind === "sem_agenda" ? "Estacionou sem agendar" : "Nova reserva manual"}</h2>
+          {mode.id && !detail && !err && <p className="animate-pulse text-asfalto/60" role="status">Carregando reserva…</p>}
           {!block && residents.length > 0 && (
             <label className="block rounded-xl bg-concreto p-3">Vincular a um morador que já usou
               <select className={inp} value={who} onChange={(e) => pickResident(e.target.value)}>
