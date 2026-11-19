@@ -32,18 +32,19 @@ export default function Settings({ onSaved }: { onSaved?: () => void } = {}) {
       <label>Custo mensal da garagem (R$)<input type="number" step="0.01" min={0} className={input} value={s.monthlyCost ?? 200} onChange={(e) => setS({ ...s, monthlyCost: Number(e.target.value) })} /></label>
       <p className="w-full text-xs text-asfalto/60">Usado só no resumo do mês para mostrar quanto sobra depois de pagar a garagem.</p>
       <label className="w-full">Nome da garagem<input className="mt-1 block w-full max-w-sm rounded-lg border border-asfalto/20 px-3 py-2" value={s.garageName} onChange={(e) => setS({ ...s, garageName: e.target.value })} /></label>
-      {([["dayPrice", "Dia (R$)"], ["nightPrice", "Noite (R$)"], ["dayStartHour", "Dia começa (h)"], ["nightStartHour", "Noite começa (h)"]] as const).map(([k, l]) => (
+      <label>Dia ou noite (R$)<input type="number" step="0.01" min={0} className={input} value={s.pricing.dayPrice} onChange={(e) => setS({ ...s, pricing: { ...s.pricing, dayPrice: Number(e.target.value), nightPrice: Number(e.target.value) } })} /></label>
+      {([["dayStartHour", "Dia começa (h)"], ["nightStartHour", "Noite começa (h)"]] as const).map(([k, l]) => (
         <label key={k}>{l}<input type="number" step="0.01" className={input} value={s.pricing[k]} onChange={num(k)} /></label>
       ))}
       <fieldset className="w-full rounded-lg border border-asfalto/15 p-3">
         <legend className="px-1 text-sm">Pacotes com desconto (vazio = desligado)</legend>
         <div className="flex flex-wrap gap-3">
-          {([["fullDayPrice", "Diária completa (R$)"], ["weekendPrice", "Fim de semana (R$)"], ["weekPrice", "Semana (R$)"]] as const).map(([k, l]) => (
+          {([["fullDayPrice", "Diária completa (R$)"], ["weekendPrice", "Fim de semana (R$)"], ["weekPrice", "Semana (R$)"], ["fortnightPrice", "15 dias (R$)"]] as const).map(([k, l]) => (
             <label key={k}>{l}<input type="number" step="0.01" min={0} className={input} value={s.pricing[k] ?? ""} placeholder="desligado"
               onChange={(e) => setS({ ...s, pricing: { ...s.pricing, [k]: e.target.value === "" ? null : Number(e.target.value) } })} /></label>
           ))}
         </div>
-        <p className="mt-2 text-xs text-asfalto/60">Diária = um dia + a noite seguinte até o check-out. Fim de semana = da noite de sexta até o check-out de segunda. Semana = 7 dias corridos. O sistema sempre cobra a combinação mais barata (avulsos ou pacotes), então um pacote mais caro que a soma das diárias nunca é usado.</p>
+        <p className="mt-2 text-xs text-asfalto/60">Diária = um dia + a noite seguinte até o check-out. Fim de semana = da noite de sexta até o check-out de segunda. Semana = 7 dias corridos. 15 dias = metade de um mês (15 dias corridos). O sistema sempre cobra a combinação mais barata (avulsos ou pacotes), então um pacote mais caro que a soma das diárias nunca é usado.</p>
       </fieldset>
       <label>Check-out até<input type="time" className={input} value={s.pricing.checkoutTime ?? "10:30"} onChange={(e) => setS({ ...s, pricing: { ...s.pricing, checkoutTime: e.target.value } })} /></label>
       <p className="w-full text-xs text-asfalto/60">Quem pernoita e sai até o check-out não paga a manhã. O dia continua começando no horário acima. Para desligar, use o mesmo horário do início do dia.</p>
