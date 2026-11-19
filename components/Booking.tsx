@@ -171,16 +171,23 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
             <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
-          <div className={`grid gap-3 ${presets.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
-            {presets.map(({ k, p, cents }) => (
-              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
-                className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
-                <div className="font-semibold">{({ dia: "☀️ Dia todo", pernoite: "🌙 Pernoite", fimdesemana: "📅 Fim de semana", semana: "🗓️ Semana", quinzena: "🗓️ 15 dias" } as Record<PresetKind, string>)[k]}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} até ${p.endDate.slice(8, 10)}/${p.endDate.slice(5, 7)} ${p.endTime} ` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
-                {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
-              </button>
-            ))}
+          <div className="grid grid-cols-2 gap-2 [&>*:last-child:nth-child(odd)]:col-span-2">
+            {presets.map(({ k, p, cents }) => {
+              const selected = !!p && f.startDate === p.startDate && f.startTime === p.startTime && f.endDate === p.endDate && f.endTime === p.endTime;
+              const when = !p ? "Já passou hoje" : k === "fimdesemana" ? `sex ${p.startTime} → seg ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} → ${dm(p.endDate)} ${p.endTime}` : `${p.startTime} → ${p.endTime} (dia seguinte)`;
+              return (
+                <button key={k} type="button" disabled={!p} aria-pressed={selected} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
+                  className={`flex min-h-20 flex-col justify-between gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-40 ${selected ? "border-asfalto bg-asfalto/5 ring-1 ring-asfalto" : "border-asfalto/20 hover:border-asfalto/50"}`}>
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-semibold">{({ dia: "☀️ Dia todo", pernoite: "🌙 Pernoite", fimdesemana: "📅 Fim de semana", semana: "🗓️ Semana", quinzena: "🗓️ 15 dias" } as Record<PresetKind, string>)[k]}</span>
+                    {cents !== null && <span className="whitespace-nowrap text-base font-bold">{brl(cents)}</span>}
+                  </span>
+                  <span className="text-xs text-asfalto/70">{when}</span>
+                </button>
+              );
+            })}
           </div>
+          {presets.some(({ p }) => p?.late) && <p className="-mt-1 text-xs text-asfalto/60">Hoje a entrada só pode ser a partir de {presets.find(({ p }) => p?.late)!.p!.startTime}.</p>}
           <input name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} className="absolute -left-[9999px]" />
           {prefilled && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-livre/10 p-3 text-sm">
