@@ -81,10 +81,10 @@ await test("manipular preço/status/id/source no corpo é ignorado", async () =>
   const r = await book(D(36), "18:00", D(37), "06:00", { extra: { totalCents: 1, status: "finalizada", id: "x", source: "admin" } });
   eq(r.status, 201); eq(r.json.totalCents, 1500);
   const row = (await db.query("select status, source from reservations where start_at=$1", [Z(D(36), "18:00")])).rows[0]; eq(row.status, "confirmada"); eq(row.source, "vizinho"); });
-await test("validações: passado, saída<entrada, 30/02, >14 dias de duração, <30min, ano 9999, placa, <script>, tamanho, JSON lixo", async () => {
+await test("validações: passado, saída<entrada, 30/02, >16 dias de duração, <30min, ano 9999, placa, <script>, tamanho, JSON lixo", async () => {
   const bad = async (...a) => eq((await book(...a)).status, 400, a.join(" "));
   await bad(D(-2), "10:00", D(-2), "12:00"); await bad(D(38), "12:00", D(38), "10:00"); await bad("2027-02-30", "10:00", "2027-02-30", "12:00");
-  await bad(D(38), "10:00", D(54), "10:00"); await bad(D(38), "10:00", D(38), "10:10"); await bad("9999-12-31", "10:00", "9999-12-31", "12:00");
+  await bad(D(38), "10:00", D(55), "10:00"); await bad(D(38), "10:00", D(38), "10:10"); await bad("9999-12-31", "10:00", "9999-12-31", "12:00");
   const x = (extra) => book(D(38), "10:00", D(38), "12:00", { extra });
   eq((await x({ plate: "12-INVALIDA" })).status, 400); eq((await x({ name: "<script>alert(1)</script>" })).status, 400); eq((await x({ name: "x".repeat(500) })).status, 400);
   eq((await call("POST", "/api/reservations", { body: "lixo" })).status, 400);

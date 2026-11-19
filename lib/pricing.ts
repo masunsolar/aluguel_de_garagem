@@ -5,8 +5,10 @@
 // Pacotes (opcionais, null = desligado): o sistema monta a combinação MAIS BARATA para o vizinho:
 //  - Diária completa: um "dia" + a "noite" seguinte (ex.: 09h até o check-out do dia seguinte)
 //  - Fim de semana: da noite de sexta até o check-out de segunda (noite sex, sáb, noite sáb, dom, noite dom)
-//  - Semana: 7 dias corridos (14 períodos seguidos)
-//  - 15 dias: metade de um mês (30 períodos seguidos)
+//  - Semana: reserva que passa por 8 datas do calendário (entrada e saída contam), até 14 períodos seguidos
+//  - 15 dias: reserva que passa por 16 datas do calendário, até 30 períodos seguidos
+// Semana e 15 dias entram sozinhos quando a reserva chega a essas datas (com ou sem os botões de atalho);
+// com menos datas é cobrado normal (a tela sugere estender quando sair mais barato).
 import { UserError } from "./errors";
 import { brtToDate, wallMs } from "./time";
 export type PricingConfig = {
@@ -31,6 +33,8 @@ const wallStr = (w: number) => new Date(w).toISOString().slice(0, 16);
 /** Completa uma configuração antiga (gravada antes de existir checkoutTime) com os valores padrão. */
 export const withDefaults = (c: Partial<PricingConfig> | null | undefined): PricingConfig => ({ ...DEFAULT_PRICING, ...(c ?? {}) });
 
+/** Dias entre a entrada e a saída que os atalhos Semana / 15 dias usam (8 e 16 datas no calendário). */
+export const PACKAGE_DAYS = { semana: 7, quinzena: 15 } as const;
 export function calculatePrice(start: Date, end: Date, config: Partial<PricingConfig> = DEFAULT_PRICING) {
   const c = withDefaults(config);
   if (Number.isNaN(+start) || Number.isNaN(+end)) throw new UserError("Data ou horário inválido.");
@@ -55,7 +59,7 @@ export function calculatePrice(start: Date, end: Date, config: Partial<PricingCo
     if (s < dayA && e <= endDay + checkout) { last.cents = 0; last.waived = true; }
   }
 
-  const { totalCents, packages } = applyPackages(periods, starts, c);
+  const { totalCents, packages } = applyPackages(periods, starts, c, Math.floor((e - 1) / D) - Math.floor(s / D) + 1);
   const charged = periods.filter((p) => !p.waived);
   return {
     days: charged.filter((p) => p.kind === "dia").length,
@@ -72,9 +76,11 @@ const cents = (v: number | null | undefined) => (typeof v === "number" && v >= 0
  * Escolhe a combinação mais barata de avulsos e pacotes (programação dinâmica sobre a sequência de períodos:
  * best[i] = menor custo para cobrir do período i até o fim). Marca em cada período o pacote que o cobriu.
  */
-function applyPackages(periods: PricePeriod[], starts: number[], c: PricingConfig) {
+function applyPackages(periods: PricePeriod[], starts: number[], c: PricingConfig, dates: number) {
   const n = periods.length, price = (p: PricePeriod) => (p.waived ? 0 : p.cents);
-  const fullDay = cents(c.fullDayPrice), weekend = cents(c.weekendPrice), week = cents(c.weekPrice), fortnight = cents(c.fortnightPrice);
+  const fullDay = cents(c.fullDayPrice), weekend = cents(c.weekendPrice);
+  // Semana / 15 dias: só quando a reserva passa por 8 / 16 datas do calendário (menos que isso = cobrança normal)
+  const week = dates >= PACKAGE_DAYS.semana + 1 ? cents(c.weekPrice) : null, fortnight = dates >= PACKAGE_DAYS.quinzena + 1 ? cents(c.fortnightPrice) : null;
   // fim de semana: noite de sexta, sábado e domingo (dia e noite). Chave = a sexta-feira daquele fim de semana.
   const weekendKey = (i: number) => {
     const day = Math.floor(starts[i] / D) * D, wd = new Date(day).getUTCDay();

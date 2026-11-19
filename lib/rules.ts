@@ -1,7 +1,7 @@
 // Limites do negócio num lugar só. (Os configuráveis pelo painel ficam na tabela settings.)
 export const RULES = {
   minMinutes: 30,          // reserva mínima
-  maxDurationDays: 14,     // reserva máxima
+  maxDurationDays: 16,     // reserva máxima (cabe o pacote de 15 dias + a manhã do check-out)
   maxPhotos: 10,           // por reserva
   maxReceipts: 3,          // comprovantes por reserva (enviados pelo vizinho)
   maxPhotoBytes: 2_000_000,

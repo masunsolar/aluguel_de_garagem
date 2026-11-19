@@ -117,7 +117,8 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
 
   // atalhos com os horários configurados no painel (preço calculado pela mesma regra do servidor)
-  const kinds: PresetKind[] = isFriday(f.startDate) ? ["dia", "pernoite", "fimdesemana"] : ["dia", "pernoite"];
+  const kinds: PresetKind[] = [...(isFriday(f.startDate) ? ["dia", "pernoite", "fimdesemana"] : ["dia", "pernoite"]) as PresetKind[],
+    ...(pricing.weekPrice != null ? ["semana" as const] : []), ...(pricing.fortnightPrice != null ? ["quinzena" as const] : [])]; // só aparecem se o pacote estiver ligado
   const presets = kinds.map((k) => {
     const p = preset(k, f.startDate, pricing, step);
     let cents: number | null = null;
@@ -130,6 +131,20 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   // Conflito com reservas já existentes (intervalo [): sair 21:00 e outro entrar 21:00 pode). O servidor confere de novo.
   const s0 = +toDate(f.startDate, f.startTime), e0 = +toDate(f.endDate, f.endTime);
   const clashes = quote ? busy.filter((b) => +new Date(b.start) < e0 && +new Date(b.end) > s0) : [];
+
+  // Sugestão: se estender até a Semana / 15 dias sai mais barato que o valor atual, avisa (e já oferece o atalho)
+  const dm = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  let sug: { label: string; endDate: string; endTime: string; cents: number } | null = null;
+  if (quote) for (const [k, label, price] of [["semana", "Semana", pricing.weekPrice], ["quinzena", "15 dias", pricing.fortnightPrice]] as const) {
+    if (price == null) continue;
+    const p = preset(k, f.startDate, pricing, step); if (!p) continue;
+    const altEnd = +toDate(p.endDate, p.endTime);
+    if (altEnd <= e0 || busy.some((b) => +new Date(b.start) < altEnd && +new Date(b.end) > s0)) continue; // já passa disso, ou bate com outra reserva
+    try {
+      const alt = calculatePrice(toDate(f.startDate, f.startTime), toDate(p.endDate, p.endTime), pricing).totalCents;
+      if (alt < quote.totalCents && (!sug || alt < sug.cents)) sug = { label, endDate: p.endDate, endTime: p.endTime, cents: alt };
+    } catch {}
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(""); setLoading(true);
@@ -156,12 +171,12 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
             <label>Saída<input className={field} type="date" min={f.startDate} value={f.endDate} onChange={set("endDate")} required /></label>
             <label>Hora<select className={field} value={f.endTime} onChange={set("endTime")} required>{opts.map((t) => <option key={t}>{t}</option>)}</select></label>
           </div>
-          <div className={`grid gap-3 ${presets.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
+          <div className={`grid gap-3 ${presets.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
             {presets.map(({ k, p, cents }) => (
               <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
                 className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
-                <div className="font-semibold">{k === "dia" ? "☀️ Dia todo" : k === "pernoite" ? "🌙 Pernoite" : "📅 Fim de semana"}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
+                <div className="font-semibold">{({ dia: "☀️ Dia todo", pernoite: "🌙 Pernoite", fimdesemana: "📅 Fim de semana", semana: "🗓️ Semana", quinzena: "🗓️ 15 dias" } as Record<PresetKind, string>)[k]}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
+                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} até ${p.endDate.slice(8, 10)}/${p.endDate.slice(5, 7)} ${p.endTime} ` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
                 {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
               </button>
             ))}
@@ -198,6 +213,11 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
               <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
             </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
           </div>
+          {quote && sug && (
+            <button type="button" onClick={() => { setErr(""); setF({ ...f, endDate: sug!.endDate, endTime: sug!.endTime }); }} className="w-full rounded-xl border border-livre/40 bg-livre/10 p-3 text-left text-sm">
+              💡 <b>Sai mais barato estender:</b> ficando até {dm(sug.endDate)} às {sug.endTime} ({sug.label}) você paga <b>{brl(sug.cents)}</b>, menos que os {brl(quote.totalCents)} de agora. <span className="underline">Estender</span>
+            </button>
+          )}
           <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>
         </div>
         {err && <p role="alert" className="mx-5 mb-2 max-h-32 shrink-0 overflow-y-auto rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
