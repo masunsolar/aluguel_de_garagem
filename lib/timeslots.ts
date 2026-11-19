@@ -1,6 +1,7 @@
 // Opções de horário do formulário de reserva. O preço é por PERÍODO (dia/noite), não por minuto,
 // então não faz sentido o vizinho escolher 18:07: o seletor anda de N em N minutos (configurável no painel).
 import { brtDay, wallMs } from "./time";
+import { PACKAGE_DAYS } from "./pricing";
 
 export const TIME_STEPS = [5, 10, 30] as const;
 export type TimeStep = (typeof TIME_STEPS)[number];
@@ -44,7 +45,6 @@ const nextDay = (day: string) => new Date(Date.parse(`${day}T12:00:00Z`) + 86_40
  * (o servidor não aceita entrada no passado) e `late` = true para a tela avisar. null = período já acabou.
  */
 export type PresetKind = "dia" | "pernoite" | "fimdesemana" | "semana" | "quinzena";
-export const PACKAGE_DAYS = { semana: 7, quinzena: 15 } as const; // saída = entrada + N dias, no horário de check-out
 export const isFriday = (day: string) => new Date(`${day}T12:00:00Z`).getUTCDay() === 5;
 export function preset(kind: PresetKind, day: string, p: { dayStartHour: number; nightStartHour: number; checkoutTime: string }, step: number, now = new Date()): Preset | null {
   const dayStart = hhmm(Math.round(p.dayStartHour * 60)), nightStart = hhmm(Math.round(p.nightStartHour * 60));

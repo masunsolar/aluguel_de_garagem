@@ -3,9 +3,7 @@ import { z } from "zod";
 import { iso, json, sql } from "../db";
 import { RULES } from "../rules";
 import { ConflictError, UserError } from "../errors";
-import { brl, calculatePrice as calc0, LONG_PACKAGES } from "../pricing";
-// o painel (você) continua com Semana e 15 dias automáticos quando a reserva cobre o período inteiro
-const calculatePrice = (s: Date, e: Date, c: Parameters<typeof calc0>[2]) => calc0(s, e, c, { packages: LONG_PACKAGES });
+import { brl, calculatePrice } from "../pricing";
 import { getPricing } from "../settings";
 import { fmtBR } from "../time";
 import { adminCreateSchema, adminPatchSchema } from "../validation";

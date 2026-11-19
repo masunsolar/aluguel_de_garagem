@@ -41,7 +41,7 @@ export async function createPublic(i: z.infer<typeof reservationSchema>, session
   if (maxUnpaid !== null && (await unpaidUsedFor({ name: i.name, apartment: i.apartment, plate: i.plate })).length > maxUnpaid)
     // Mensagem genérica: não diz quantas, de quando nem qual dado bateu (só o admin vê os detalhes)
     throw new ForbiddenError("Não foi possível reservar: há pagamentos pendentes de reservas anteriores. Pague pelo PIX e envie o comprovante em “Minhas reservas”, ou fale com o responsável pela garagem.");
-  const { totalCents, breakdown } = calculatePrice(start, end, await getPricing(), { packages: i.package ? [i.package] : [] }); // preço SEMPRE calculado aqui; o do navegador é só prévia
+  const { totalCents, breakdown } = calculatePrice(start, end, await getPricing()); // preço SEMPRE calculado aqui; o do navegador é só prévia
   const code = randomBytes(9).toString("base64url"); // código secreto de acompanhamento (72 bits; só o hash é guardado)
   const details = JSON.stringify({ entrada: start.toISOString(), saida: end.toISOString(), totalCents });
   try {

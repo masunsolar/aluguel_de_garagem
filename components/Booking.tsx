@@ -7,9 +7,9 @@ import PixBox from "./PixBox";
 import PriceBreakdown from "./PriceBreakdown";
 import DayBar from "./DayBar";
 import type { PixConfig } from "@/lib/pix";
-import { calculatePrice, brl, type LongPackage, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
+import { calculatePrice, brl, toDate, withDefaults, DEFAULT_PRICING, type PricingConfig, type PriceBreakdown as Breakdown } from "@/lib/pricing";
 import { brtDay, fmtBR } from "@/lib/time";
-import { DEFAULT_TIME_STEP, PACKAGE_DAYS, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
+import { DEFAULT_TIME_STEP, isFriday, preset, timeOptions, type PresetKind } from "@/lib/timeslots";
 
 type Busy = { start: string; end: string; blocked?: boolean; reason?: string };
 const iso = brtDay;
@@ -109,10 +109,9 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   const [f, setF] = useState({ startDate: day, startTime: "18:00", endDate: day, endTime: "23:00", ...EMPTY, ...(saved ?? {}), website: "" });
   const [remember, setRemember] = useState(true); const [prefilled, setPrefilled] = useState(!!saved);
   const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
-  const [pkg, setPkg] = useState<LongPackage | null>(null); // Semana / 15 dias: só vale se escolhido pelo botão e mudar data/hora o desliga
   const [credit, setCredit] = useState(0); // crédito de quem usa este aparelho; o servidor decide quanto abate de verdade
   useEffect(() => { fetch("/api/minhas-reservas/credito").then((r) => r.json()).then((c) => setCredit(Number(c.creditCents) || 0)).catch(() => {}); }, []);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); if (/^(start|end)(Date|Time)$/.test(k)) setPkg(null); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setErr(""); setF({ ...f, [k]: e.target.value }); }; // limpa o erro anterior ao editar
 
   // horários de N em N minutos; o check-out e os valores já escolhidos sempre aparecem na lista
   const opts = useMemo(() => timeOptions(step, [pricing.checkoutTime, f.startTime, f.endTime]), [step, pricing.checkoutTime, f.startTime, f.endTime]);
@@ -123,20 +122,34 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
   const presets = kinds.map((k) => {
     const p = preset(k, f.startDate, pricing, step);
     let cents: number | null = null;
-    try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing, { packages: k === "semana" || k === "quinzena" ? [k] : [] }).totalCents; } catch {}
+    try { if (p) cents = calculatePrice(toDate(p.startDate, p.startTime), toDate(p.endDate, p.endTime), pricing).totalCents; } catch {}
     return { k, p, cents };
   });
 
   let quote: ReturnType<typeof calculatePrice> | null = null;
-  try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing, { packages: pkg ? [pkg] : [] }); } catch {}
+  try { quote = calculatePrice(toDate(f.startDate, f.startTime), toDate(f.endDate, f.endTime), pricing); } catch {}
   // Conflito com reservas já existentes (intervalo [): sair 21:00 e outro entrar 21:00 pode). O servidor confere de novo.
   const s0 = +toDate(f.startDate, f.startTime), e0 = +toDate(f.endDate, f.endTime);
   const clashes = quote ? busy.filter((b) => +new Date(b.start) < e0 && +new Date(b.end) > s0) : [];
 
+  // Sugestão: se estender até a Semana / 15 dias sai mais barato que o valor atual, avisa (e já oferece o atalho)
+  const dm = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  let sug: { label: string; endDate: string; endTime: string; cents: number } | null = null;
+  if (quote) for (const [k, label, price] of [["semana", "Semana", pricing.weekPrice], ["quinzena", "15 dias", pricing.fortnightPrice]] as const) {
+    if (price == null) continue;
+    const p = preset(k, f.startDate, pricing, step); if (!p) continue;
+    const altEnd = +toDate(p.endDate, p.endTime);
+    if (altEnd <= e0 || busy.some((b) => +new Date(b.start) < altEnd && +new Date(b.end) > s0)) continue; // já passa disso, ou bate com outra reserva
+    try {
+      const alt = calculatePrice(toDate(f.startDate, f.startTime), toDate(p.endDate, p.endTime), pricing).totalCents;
+      if (alt < quote.totalCents && (!sug || alt < sug.cents)) sug = { label, endDate: p.endDate, endTime: p.endTime, cents: alt };
+    } catch {}
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(""); setLoading(true);
     try {
-      const r = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...f, package: pkg ?? undefined }) });
+      const r = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(f) });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
         if (remember) saveProfile(f); else clearProfile(); // lembra o último veículo usado
@@ -160,10 +173,10 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
           </div>
           <div className={`grid gap-3 ${presets.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}`}>
             {presets.map(({ k, p, cents }) => (
-              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); setPkg(k === "semana" || k === "quinzena" ? k : null); }}
+              <button key={k} type="button" disabled={!p} onClick={() => { if (!p) return; setErr(""); const { late, ...v } = p; setF({ ...f, ...v }); }}
                 className="rounded-lg border border-asfalto/20 px-3 py-2 text-left text-sm disabled:opacity-40">
                 <div className="font-semibold">{({ dia: "☀️ Dia todo", pernoite: "🌙 Pernoite", fimdesemana: "📅 Fim de semana", semana: "🗓️ Semana", quinzena: "🗓️ 15 dias" } as Record<PresetKind, string>)[k]}{cents !== null && <span className="font-normal"> · {brl(cents)}</span>}</div>
-                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} até ${p.endDate.slice(8, 10)}/${p.endDate.slice(5, 7)} ${p.endTime} (${PACKAGE_DAYS[k]} dias)` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
+                <div className="text-asfalto/70">{p ? k === "fimdesemana" ? `sexta ${p.startTime} até segunda ${p.endTime}` : k === "semana" || k === "quinzena" ? `${p.startTime} até ${p.endDate.slice(8, 10)}/${p.endDate.slice(5, 7)} ${p.endTime} ` : `${p.startTime} até ${p.endTime} do dia seguinte` : "Já passou hoje"}</div>
                 {p?.late && <div className="text-xs text-asfalto/60">Hoje: entrada a partir de {p.startTime}</div>}
               </button>
             ))}
@@ -200,6 +213,11 @@ function Form({ day, pricing, step, busy, maxDate, onClose, onDone }: { day: str
               <PriceBreakdown breakdown={quote.breakdown} className="mt-2" />
             </> : <span className="text-ocupado">A saída precisa ser depois da entrada.</span>}
           </div>
+          {quote && sug && (
+            <button type="button" onClick={() => { setErr(""); setF({ ...f, endDate: sug!.endDate, endTime: sug!.endTime }); }} className="w-full rounded-xl border border-livre/40 bg-livre/10 p-3 text-left text-sm">
+              💡 <b>Sai mais barato estender:</b> ficando até {dm(sug.endDate)} às {sug.endTime} ({sug.label}) você paga <b>{brl(sug.cents)}</b>, menos que os {brl(quote.totalCents)} de agora. <span className="underline">Estender</span>
+            </button>
+          )}
           <p className="text-sm text-asfalto/70">Check-out até <b>{pricing.checkoutTime}</b>. Pernoitou e saiu até esse horário? A manhã não é cobrada.</p>
         </div>
         {err && <p role="alert" className="mx-5 mb-2 max-h-32 shrink-0 overflow-y-auto rounded-lg bg-ocupado/10 p-3 text-ocupado">{err}</p>}
